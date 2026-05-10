@@ -1,0 +1,35 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build output
+dist
+dist-ssr
+.netlify
+
+# Env (không commit)
+.env
+.env.local
+.env.*.local
+
+# Ghi chú nội bộ chứa secret (không commit)
+CLAUDE.md
+
+# Logs / cache
+*.log
+.npm
+.eslintcache
+.vite
+
+# Editor
+.vscode
+.idea
+*.swp
+.DS_Store
+Thumbs.db
+
+# Office temp files
+~$*
+
+# OS / build local
+*.tsbuildinfo
