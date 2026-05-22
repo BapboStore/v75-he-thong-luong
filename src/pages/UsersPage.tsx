@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { KeyRound, Pencil, RotateCcw, ShieldCheck } from 'lucide-react'
+import { KeyRound, Pencil, RotateCcw, ShieldCheck, UserPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import {
@@ -12,7 +13,8 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  adminResetPassword, listDepartments, listEmployees, listUsers, updateUserRow,
+  adminCreateUser, adminResetPassword, listDepartments, listEmployees, listUsers, updateUserRow,
+  type CreateUserPayload,
 } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -21,6 +23,7 @@ import {
 } from '@/lib/types'
 
 const ROLES: UserRole[] = ['user', 'truong_phong', 'admin_luong', 'admin_he_thong']
+const CCCD_REGEX = /^[0-9]{9,12}$/
 
 interface FormState {
   id: string
@@ -39,6 +42,87 @@ interface UserEditFormProps {
   onSubmit: (e: React.FormEvent) => void
   submitting: boolean
 }
+
+// ─── Form tạo user mới ────────────────────────────────────────────────────────
+
+interface CreateFormState {
+  cccd: string
+  role: UserRole
+  department_id: string
+  employee_id: string
+}
+
+interface CreateUserFormProps {
+  form: CreateFormState
+  setForm: (f: CreateFormState) => void
+  departments: Department[]
+  freeEmployees: EmployeeFull[]   // NV chưa liên kết tài khoản
+  onClose: () => void
+  onSubmit: (e: React.FormEvent) => void
+  submitting: boolean
+}
+
+function CreateUserForm({ form, setForm, departments, freeEmployees, onClose, onSubmit, submitting }: CreateUserFormProps) {
+  const cccdError = form.cccd && !CCCD_REGEX.test(form.cccd) ? 'CCCD phải là 9–12 chữ số' : ''
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      <div className="space-y-2">
+        <Label htmlFor="new-cccd">CCCD <span className="text-destructive">*</span></Label>
+        <Input
+          id="new-cccd"
+          value={form.cccd}
+          onChange={e => setForm({ ...form, cccd: e.target.value.trim() })}
+          placeholder="001199000009"
+          maxLength={12}
+          required
+        />
+        {cccdError && <p className="text-xs text-destructive">{cccdError}</p>}
+        <p className="text-xs text-muted-foreground">Email đăng nhập sẽ là <code>{form.cccd || 'CCCD'}@v75.local</code>. Mật khẩu mặc định: <code>8888V75</code>.</p>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="new-role">Role <span className="text-destructive">*</span></Label>
+        <Select id="new-role" value={form.role}
+          onChange={e => setForm({ ...form, role: e.target.value as UserRole })}>
+          {ROLES.map(r => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+        </Select>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="new-dept">Phòng ban</Label>
+        <Select id="new-dept" value={form.department_id}
+          onChange={e => setForm({ ...form, department_id: e.target.value })}>
+          <option value="">— Không gán —</option>
+          {departments.filter(d => d.is_active).map(d => (
+            <option key={d.id} value={d.id}>{d.code} – {d.name}</option>
+          ))}
+        </Select>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="new-emp">Liên kết nhân viên</Label>
+        <Select id="new-emp" value={form.employee_id}
+          onChange={e => setForm({ ...form, employee_id: e.target.value })}>
+          <option value="">— Không liên kết —</option>
+          {freeEmployees.map(e => (
+            <option key={e.id} value={e.id}>{e.ho_ten} ({e.cccd})</option>
+          ))}
+        </Select>
+        <p className="text-xs text-muted-foreground">Chỉ hiển thị nhân viên chưa có tài khoản.</p>
+      </div>
+
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onClose} disabled={submitting}>Huỷ</Button>
+        <Button type="submit" disabled={submitting || !!cccdError || !form.cccd}>
+          {submitting ? 'Đang tạo...' : 'Tạo tài khoản'}
+        </Button>
+      </DialogFooter>
+    </form>
+  )
+}
+
+// ─── Form chỉnh sửa user ──────────────────────────────────────────────────────
 
 function UserEditForm({ form, setForm, departments, onClose, onSubmit, submitting }: UserEditFormProps) {
   return (
@@ -99,6 +183,12 @@ export default function UsersPage() {
   // Reset password confirm dialog
   const [resetTarget, setResetTarget] = useState<AppUser | null>(null)
   const [resetting, setResetting] = useState(false)
+  // Create user dialog
+  const [openCreate, setOpenCreate] = useState(false)
+  const [createForm, setCreateForm] = useState<CreateFormState>({
+    cccd: '', role: 'user', department_id: '', employee_id: '',
+  })
+  const [creating, setCreating] = useState(false)
 
   const reload = async () => {
     setLoading(true); setError(null)
@@ -128,6 +218,13 @@ export default function UsersPage() {
   }, [employees])
 
   const deptMap = useMemo(() => new Map(departments.map(d => [d.id, d])), [departments])
+
+  // NV chưa có tài khoản (employee_id chưa xuất hiện trong bảng users)
+  const linkedEmpIds = useMemo(() => new Set(users.map(u => u.employee_id).filter(Boolean)), [users])
+  const freeEmployees = useMemo(
+    () => employees.filter(e => !linkedEmpIds.has(e.id)),
+    [employees, linkedEmpIds],
+  )
 
   const onEdit = (u: AppUser) => {
     setForm({
@@ -170,6 +267,30 @@ export default function UsersPage() {
     }
   }
 
+  const onOpenCreate = () => {
+    setCreateForm({ cccd: '', role: 'user', department_id: '', employee_id: '' })
+    setError(null); setInfo(null)
+    setOpenCreate(true)
+  }
+
+  const onCreateSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setCreating(true); setError(null); setInfo(null)
+    try {
+      const payload: CreateUserPayload = { cccd: createForm.cccd, role: createForm.role }
+      if (createForm.department_id) payload.department_id = createForm.department_id
+      if (createForm.employee_id)   payload.employee_id   = createForm.employee_id
+      const resp = await adminCreateUser(payload)
+      setInfo(resp.message)
+      setOpenCreate(false)
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Tạo tài khoản thất bại.')
+    } finally {
+      setCreating(false)
+    }
+  }
+
   const onConfirmResetPassword = async () => {
     if (!resetTarget) return
     setResetting(true); setError(null); setInfo(null)
@@ -190,14 +311,19 @@ export default function UsersPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <ShieldCheck className="h-6 w-6 text-primary" /> Tài khoản &amp; Phân quyền
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Chỉ admin_he_thong. Nút <KeyRound className="inline h-3 w-3" /> reset mật khẩu về mặc định <code>8888V75</code>
-          {' '}(qua Edge Function <code>admin-reset-password</code>); user phải đổi MK lần đăng nhập kế tiếp.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <ShieldCheck className="h-6 w-6 text-primary" /> Tài khoản &amp; Phân quyền
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Chỉ admin_he_thong. Nút <KeyRound className="inline h-3 w-3" /> reset mật khẩu về mặc định <code>8888V75</code>;
+            nút <UserPlus className="inline h-3 w-3" /> tạo tài khoản mới.
+          </p>
+        </div>
+        <Button onClick={onOpenCreate} className="flex items-center gap-2 shrink-0">
+          <UserPlus className="h-4 w-4" /> Thêm tài khoản
+        </Button>
       </div>
 
       {error && (
@@ -353,6 +479,30 @@ export default function UsersPage() {
               submitting={submitting}
             />
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog tạo tài khoản mới */}
+      <Dialog open={openCreate} onOpenChange={(o) => { if (!o) setOpenCreate(false) }}>
+        <DialogContent onClose={() => setOpenCreate(false)}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-5 w-5 text-primary" /> Tạo tài khoản mới
+            </DialogTitle>
+            <DialogDescription>
+              Tạo tài khoản Supabase Auth + hồ sơ user. Mật khẩu mặc định <code>8888V75</code>;
+              user phải đổi MK ở lần đăng nhập đầu tiên.
+            </DialogDescription>
+          </DialogHeader>
+          <CreateUserForm
+            form={createForm}
+            setForm={setCreateForm}
+            departments={departments}
+            freeEmployees={freeEmployees}
+            onClose={() => setOpenCreate(false)}
+            onSubmit={onCreateSubmit}
+            submitting={creating}
+          />
         </DialogContent>
       </Dialog>
     </div>

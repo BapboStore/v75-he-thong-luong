@@ -590,6 +590,40 @@ export async function adminResetPassword(targetUserId: string): Promise<{ ok: tr
   return data as { ok: true; cccd: string }
 }
 
+// ─── admin-create-user ────────────────────────────────────────────────────────
+
+export interface CreateUserPayload {
+  cccd: string
+  role: import('@/lib/types').UserRole
+  department_id?: string
+  employee_id?: string
+}
+
+/**
+ * Gọi Edge Function `admin-create-user` để tạo tài khoản mới (Auth + public.users).
+ * Email tự động = cccd@v75.local, MK mặc định = 8888V75, must_change_password=true.
+ * Chỉ admin_he_thong mới được gọi (Edge Function verify JWT).
+ */
+export async function adminCreateUser(
+  payload: CreateUserPayload,
+): Promise<{ ok: true; cccd: string; user_id: string; message: string }> {
+  const body: Record<string, string> = {
+    cccd: payload.cccd,
+    role: payload.role,
+  }
+  if (payload.department_id) body.department_id = payload.department_id
+  if (payload.employee_id)   body.employee_id   = payload.employee_id
+
+  const { data, error } = await supabase.functions.invoke('admin-create-user', { body })
+  if (error) {
+    throw new Error(error.message || 'Tạo tài khoản thất bại.')
+  }
+  if (!data?.ok) {
+    throw new Error(data?.error || 'Tạo tài khoản thất bại (không rõ lý do).')
+  }
+  return data as { ok: true; cccd: string; user_id: string; message: string }
+}
+
 /** Cập nhật cờ is_matched cho cặp 2 nguồn lái xe theo công thức RULE-06 */
 export async function refreshDriverMatch(department_id: string, month_year: string): Promise<{
   matched: number
