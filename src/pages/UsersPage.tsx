@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Pencil, RotateCcw, ShieldCheck } from 'lucide-react'
+import { KeyRound, Pencil, RotateCcw, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
@@ -12,8 +12,9 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  listDepartments, listEmployees, listUsers, updateUserRow,
+  adminResetPassword, listDepartments, listEmployees, listUsers, updateUserRow,
 } from '@/lib/api'
+import { useAuth } from '@/contexts/AuthContext'
 import {
   ROLE_LABEL,
   type AppUser, type Department, type EmployeeFull, type UserRole,
@@ -84,14 +85,20 @@ function UserEditForm({ form, setForm, departments, onClose, onSubmit, submittin
 }
 
 export default function UsersPage() {
+  const { profile } = useAuth()
+  const myId = profile?.user.id ?? null
   const [users, setUsers] = useState<AppUser[]>([])
   const [employees, setEmployees] = useState<EmployeeFull[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [info, setInfo] = useState<string | null>(null)
   const [openForm, setOpenForm] = useState(false)
   const [form, setForm] = useState<FormState | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // Reset password confirm dialog
+  const [resetTarget, setResetTarget] = useState<AppUser | null>(null)
+  const [resetting, setResetting] = useState(false)
 
   const reload = async () => {
     setLoading(true); setError(null)
@@ -163,6 +170,24 @@ export default function UsersPage() {
     }
   }
 
+  const onConfirmResetPassword = async () => {
+    if (!resetTarget) return
+    setResetting(true); setError(null); setInfo(null)
+    try {
+      const resp = await adminResetPassword(resetTarget.id)
+      setInfo(
+        `Đã reset mật khẩu user ${resp.cccd} về mặc định 8888V75. ` +
+        'User sẽ phải đổi mật khẩu khi đăng nhập lần kế tiếp.',
+      )
+      setResetTarget(null)
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Reset mật khẩu thất bại.')
+    } finally {
+      setResetting(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div>
@@ -170,7 +195,8 @@ export default function UsersPage() {
           <ShieldCheck className="h-6 w-6 text-primary" /> Tài khoản &amp; Phân quyền
         </h1>
         <p className="text-sm text-muted-foreground">
-          Chỉ admin_he_thong. Reset mật khẩu / tạo user mới chạy qua script <code>supabase/scripts/seed-users.mjs</code> ở phía server.
+          Chỉ admin_he_thong. Nút <KeyRound className="inline h-3 w-3" /> reset mật khẩu về mặc định <code>8888V75</code>
+          {' '}(qua Edge Function <code>admin-reset-password</code>); user phải đổi MK lần đăng nhập kế tiếp.
         </p>
       </div>
 
@@ -178,6 +204,12 @@ export default function UsersPage() {
         <Alert variant="destructive">
           <AlertTitle>Lỗi</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {info && (
+        <Alert variant="success">
+          <AlertTitle>Thành công</AlertTitle>
+          <AlertDescription>{info}</AlertDescription>
         </Alert>
       )}
 
@@ -234,6 +266,17 @@ export default function UsersPage() {
                         <RotateCcw className="h-3 w-3" />
                       </Button>
                     )}
+                    {/* Reset password — không cho admin reset chính mình */}
+                    {u.id !== myId && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setResetTarget(u)}
+                        title="Reset mật khẩu về 8888V75"
+                      >
+                        <KeyRound className="h-3 w-3" />
+                      </Button>
+                    )}
                     <Button size="sm" variant="outline" onClick={() => onEdit(u)}>
                       <Pencil className="h-3 w-3" />
                     </Button>
@@ -244,6 +287,52 @@ export default function UsersPage() {
           })}
         </TableBody>
       </Table>
+
+      {/* Confirm reset password dialog */}
+      <Dialog open={resetTarget !== null} onOpenChange={(o) => { if (!o) setResetTarget(null) }}>
+        <DialogContent onClose={() => setResetTarget(null)}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="h-5 w-5 text-primary" /> Xác nhận reset mật khẩu
+            </DialogTitle>
+            <DialogDescription>
+              Mật khẩu sẽ được đặt về <code>8888V75</code>. User phải đổi mật khẩu khi đăng nhập lần kế tiếp.
+              Đồng thời bộ đếm khoá (failed_attempts + locked_until) cũng được xoá.
+            </DialogDescription>
+          </DialogHeader>
+          {resetTarget && (
+            <div className="space-y-3 py-2">
+              <div className="rounded-md bg-muted p-3 text-sm space-y-1">
+                <div><span className="text-muted-foreground">CCCD:</span> <code>{resetTarget.cccd}</code></div>
+                <div>
+                  <span className="text-muted-foreground">Họ tên:</span>{' '}
+                  <strong>{empByCccd.get(resetTarget.cccd)?.ho_ten ?? '—'}</strong>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Role:</span>{' '}
+                  <Badge variant={resetTarget.role === 'admin_he_thong' ? 'destructive' : 'info'}>
+                    {ROLE_LABEL[resetTarget.role]}
+                  </Badge>
+                </div>
+              </div>
+              <Alert variant="warning">
+                <AlertTitle>Lưu ý</AlertTitle>
+                <AlertDescription>
+                  Hãy thông báo cho user mật khẩu mới trước khi reset. Hành động này không thể hoàn tác.
+                </AlertDescription>
+              </Alert>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setResetTarget(null)} disabled={resetting}>
+              Huỷ
+            </Button>
+            <Button type="button" onClick={onConfirmResetPassword} disabled={resetting}>
+              {resetting ? 'Đang reset...' : 'Xác nhận reset'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={openForm} onOpenChange={setOpenForm}>
         <DialogContent onClose={() => setOpenForm(false)}>

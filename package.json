@@ -1,7 +1,7 @@
 {
   "name": "v75-he-thong-luong",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.8.0",
   "type": "module",
   "description": "Hệ thống Quản lý Tiền lương V75 – Vite + React + TS + Supabase + Netlify",
   "scripts": {
@@ -16,11 +16,14 @@
     "@supabase/supabase-js": "^2.45.4",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.2",
     "lucide-react": "^0.452.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.27.0",
-    "tailwind-merge": "^2.5.4"
+    "tailwind-merge": "^2.5.4",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/node": "^22.7.5",

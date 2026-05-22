@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  BarChart3, Calculator, CheckCircle2, FileSpreadsheet, Pencil, RotateCcw, Save, Send, XCircle,
+  BarChart3, Calculator, CheckCircle2, Download, FileSpreadsheet, Pencil, RotateCcw, Save, Send, XCircle,
 } from 'lucide-react'
+import { exportSalaryToExcel } from '@/lib/excel'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -373,6 +374,25 @@ export default function SalaryPage() {
         </Button>
         <Button onClick={reload} disabled={busy} variant="outline">
           <FileSpreadsheet className="h-4 w-4 mr-1" /> Tải lại
+        </Button>
+        <Button
+          onClick={() => {
+            try {
+              exportSalaryToExcel({
+                records,
+                department: departments.find(d => d.id === deptId) ?? null,
+                monthYear,
+              })
+              setInfo(`Đã xuất Excel ${records.length} bản lương tháng ${monthYear}.`)
+            } catch (e) {
+              setError(e instanceof Error ? e.message : 'Xuất Excel thất bại.')
+            }
+          }}
+          disabled={busy || records.length === 0}
+          variant="outline"
+          title="Xuất file .xlsx của bảng lương đang hiển thị"
+        >
+          <Download className="h-4 w-4 mr-1" /> Xuất Excel
         </Button>
       </div>
 

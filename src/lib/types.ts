@@ -269,3 +269,51 @@ export interface AttendanceDriver {
   is_matched: boolean
   ghi_chu: string | null
 }
+
+// =============================================================
+// Activity logs (Module 5 — phiên 8)
+// =============================================================
+
+export interface ActivityLog {
+  id: string
+  user_id: string | null
+  user_cccd: string | null
+  /** Định dạng `<op>.<table>`: insert.departments, update.users, delete.attendance_driver, ... */
+  action: string
+  entity_type: string | null
+  entity_id: string | null
+  old_value: Record<string, unknown> | null
+  new_value: Record<string, unknown> | null
+  ip_address: string | null
+  user_agent: string | null
+  description: string | null
+  created_at: string
+}
+
+/** Tách action `<op>.<table>` thành `{ op, table }`. Phòng trường hợp action không có dấu chấm. */
+export function parseLogAction(action: string): { op: string; table: string } {
+  const i = action.indexOf('.')
+  if (i < 0) return { op: action, table: '' }
+  return { op: action.slice(0, i), table: action.slice(i + 1) }
+}
+
+export const LOG_OP_LABEL: Record<string, string> = {
+  insert: 'Thêm mới',
+  update: 'Cập nhật',
+  delete: 'Xoá',
+  login: 'Đăng nhập',
+  logout: 'Đăng xuất',
+}
+
+/** Bảng audit từ migration 005/006 phủ 9 bảng (users đã DROP). Dùng cho dropdown filter. */
+export const LOG_ENTITY_TYPES = [
+  'departments',
+  'employees',
+  'salary_config',
+  'salary_grades',
+  'attendance_office',
+  'attendance_driver',
+  'attendance_security',
+  'attendance_technician',
+  'salary_records',
+] as const

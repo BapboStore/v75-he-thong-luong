@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import {
   BarChart3, Building2, ClipboardCheck, FileText, History,
-  LayoutDashboard, Settings, Users, Wallet,
+  LayoutDashboard, Settings, TrendingUp, Users, Wallet,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { cn } from '@/lib/utils'
@@ -20,6 +20,7 @@ const MENU: MenuItem[] = [
   { to: '/attendance',  label: 'Chấm công',          icon: ClipboardCheck,  roles: ['truong_phong','admin_luong','admin_he_thong'] },
   { to: '/salary',      label: 'Bảng lương',         icon: BarChart3,       roles: ['truong_phong','admin_luong','admin_he_thong'] },
   { to: '/employees',   label: 'Nhân viên',          icon: Users,           roles: ['admin_luong','admin_he_thong'] },
+  { to: '/promotions',  label: 'Nâng bậc TNVK',      icon: TrendingUp,      roles: ['admin_luong','admin_he_thong'] },
   { to: '/departments', label: 'Phòng ban',          icon: Building2,       roles: ['admin_luong','admin_he_thong'] },
   { to: '/reports',     label: 'Báo cáo / Xuất file', icon: FileText,       roles: ['admin_luong','admin_he_thong'] },
   { to: '/users',       label: 'Tài khoản & Phân quyền', icon: Users,       roles: ['admin_he_thong'] },
@@ -38,7 +39,7 @@ export function Sidebar() {
         <div className="h-9 w-9 rounded-lg bg-primary text-primary-foreground flex items-center justify-center text-sm font-bold">V75</div>
         <div>
           <div className="text-sm font-semibold leading-tight">Hệ thống Lương</div>
-          <div className="text-[11px] text-muted-foreground">v0.3.0 – Module 1+2+3+4</div>
+          <div className="text-[11px] text-muted-foreground">v0.8.0 – Nâng bậc + Reset PW + Lockout</div>
         </div>
       </div>
 

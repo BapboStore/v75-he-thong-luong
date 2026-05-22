@@ -1,11 +1,34 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { useAuth } from '@/contexts/AuthContext'
 import { ROLE_LABEL, STATUS_LABEL } from '@/lib/types'
 import { formatDateTime } from '@/lib/utils'
 
 export default function DashboardPage() {
-  const { profile } = useAuth()
-  if (!profile) return null
+  const { profile, refreshProfile } = useAuth()
+
+  // v0.4.3: profile thường được hydrate ngay từ localStorage cache khi F5 →
+  // hiếm khi rơi vào fallback này. Chỉ thấy lần đăng nhập đầu tiên (chưa có
+  // cache) trong khi loadProfile chạy nền, hoặc khi mạng/Supabase rất tệ.
+  if (!profile) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <Card>
+          <CardHeader><CardTitle className="text-base">Đang tải hồ sơ…</CardTitle></CardHeader>
+          <CardContent className="text-sm text-muted-foreground space-y-3">
+            <p>
+              Hồ sơ người dùng chưa tải xong (có thể do mạng chậm hoặc Supabase đang nghẽn).
+              Anh thử bấm Tải lại bên dưới; nếu vẫn lỗi, đăng nhập lại.
+            </p>
+            <Button size="sm" onClick={() => { void refreshProfile() }}>
+              Tải lại hồ sơ
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   const { user, employee, department } = profile
 

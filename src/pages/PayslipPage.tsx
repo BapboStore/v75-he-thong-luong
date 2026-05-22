@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Printer, Wallet } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { FileDown, Printer, Wallet } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { listMySalaryRecords } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmtVND } from '@/lib/utils'
+import { exportPayslipToPdf } from '@/lib/pdf'
 import { SR_STATUS_LABEL, type SalaryRecord, type SalaryRecordStatus } from '@/lib/types'
 
 function StatusBadge({ status }: { status: SalaryRecordStatus }) {
@@ -26,6 +27,8 @@ export default function PayslipPage() {
   const [selectedMonth, setSelectedMonth] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const printableRef = useRef<HTMLDivElement | null>(null)
 
   const employeeId = profile?.user.employee_id ?? null
 
@@ -50,6 +53,24 @@ export default function PayslipPage() {
     () => records.find(r => r.month_year === selectedMonth) ?? null,
     [records, selectedMonth],
   )
+
+  async function handleExportPdf() {
+    if (!current || !printableRef.current) return
+    setError(null)
+    setExporting(true)
+    try {
+      await exportPayslipToPdf({
+        element: printableRef.current,
+        cccd: current.cccd,
+        monthYear: current.month_year,
+        hoTen: current.ho_ten,
+      })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Không xuất được PDF.')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   if (!employeeId) {
     return (
@@ -90,6 +111,15 @@ export default function PayslipPage() {
               ))}
             </Select>
           </div>
+          <Button
+            variant="secondary"
+            onClick={handleExportPdf}
+            disabled={!current || exporting}
+            title="Xuất phiếu lương ra PDF khổ A5 dọc (1 file/NV)"
+          >
+            <FileDown className="h-4 w-4 mr-1" />
+            {exporting ? 'Đang xuất…' : 'Xuất PDF'}
+          </Button>
           <Button onClick={() => window.print()} disabled={!current}>
             <Printer className="h-4 w-4 mr-1" /> In phiếu
           </Button>
@@ -113,7 +143,9 @@ export default function PayslipPage() {
           </AlertDescription>
         </Alert>
       ) : (
-        <PayslipDetail r={current} />
+        <div ref={printableRef} className="bg-background p-2">
+          <PayslipDetail r={current} />
+        </div>
       )}
     </div>
   )

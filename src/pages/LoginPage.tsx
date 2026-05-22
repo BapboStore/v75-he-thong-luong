@@ -8,24 +8,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { useAuth } from '@/contexts/AuthContext'
 import { isValidCccd } from '@/lib/utils'
+import { callAuthLockout } from '@/lib/api'
 
-const MAX_FAILED   = 5
-const LOCK_MINUTES = 5
-const STORAGE_KEY  = 'v75_login_state'
-
-interface LocalLockState {
-  cccd: string
-  failed: number
-  lockedUntil?: number   // epoch ms
-}
-
-function getLockState(): LocalLockState | null {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null') } catch { return null }
-}
-function setLockState(s: LocalLockState | null) {
-  if (!s) localStorage.removeItem(STORAGE_KEY)
-  else    localStorage.setItem(STORAGE_KEY, JSON.stringify(s))
-}
+const MAX_FAILED = 5
 
 export default function LoginPage() {
   const { session, signInWithCccd, loading } = useAuth()
@@ -37,23 +22,47 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Lockout state (server-side qua Edge Function `auth-lockout`)
+  const [serverLocked, setServerLocked] = useState(false)
   const [secondsLeft, setSecondsLeft] = useState(0)
 
   useEffect(() => {
     if (!loading && session) navigate(from, { replace: true })
   }, [loading, session, navigate, from])
 
-  // Đếm ngược khoá
+  // Đếm ngược thời gian khoá còn lại (client-side ticker, không gọi lại server).
   useEffect(() => {
+    if (secondsLeft <= 0) {
+      if (serverLocked) setServerLocked(false)
+      return
+    }
     const id = setInterval(() => {
-      const s = getLockState()
-      if (!s?.lockedUntil) { setSecondsLeft(0); return }
-      const remain = Math.max(0, Math.ceil((s.lockedUntil - Date.now()) / 1000))
-      setSecondsLeft(remain)
-      if (remain === 0) setLockState({ cccd: s.cccd, failed: 0 })
-    }, 500)
+      setSecondsLeft((s) => Math.max(0, s - 1))
+    }, 1000)
     return () => clearInterval(id)
-  }, [])
+  }, [secondsLeft, serverLocked])
+
+  /** Kiểm tra lock server-side khi user blur ô CCCD hoặc nhấn login. */
+  const checkLockoutForCccd = async (c: string): Promise<boolean> => {
+    if (!isValidCccd(c)) return false
+    try {
+      const resp = await callAuthLockout('check', c)
+      if (resp.locked) {
+        setServerLocked(true)
+        setSecondsLeft(resp.remaining_seconds)
+        setError(`Tài khoản đang bị khoá. Thử lại sau ${resp.remaining_seconds}s.`)
+        return true
+      }
+      setServerLocked(false)
+      setSecondsLeft(0)
+      return false
+    } catch (e) {
+      // Edge Function lỗi / mạng → KHÔNG block UI, log warn, dùng client fallback
+      // eslint-disable-next-line no-console
+      console.warn('[V75] auth-lockout check thất bại:', e)
+      return false
+    }
+  }
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -62,32 +71,38 @@ export default function LoginPage() {
     if (!isValidCccd(cccd)) { setError('CCCD phải là 9–12 chữ số.'); return }
     if (password.length < 4) { setError('Mật khẩu không hợp lệ.'); return }
 
-    const lock = getLockState()
-    if (lock?.cccd === cccd && lock.lockedUntil && lock.lockedUntil > Date.now()) {
-      const r = Math.ceil((lock.lockedUntil - Date.now()) / 1000)
-      setError(`Tài khoản đang bị khoá. Thử lại sau ${r}s.`)
-      return
-    }
+    // 1. Check server-side lockout
+    const isLocked = await checkLockoutForCccd(cccd)
+    if (isLocked) return
 
     setSubmitting(true)
     const result = await signInWithCccd(cccd, password)
     setSubmitting(false)
 
     if (result.ok) {
-      setLockState(null)
+      // 2a. Đăng nhập OK → reset failed_attempts server-side (best-effort).
+      // AuthContext đã update last_login_at + failed_attempts=0 trực tiếp qua RLS
+      // self-update; gọi Edge Function reset chỉ là backup phòng RLS chặn.
+      try { await callAuthLockout('reset', cccd) } catch { /* ignore */ }
       navigate(from, { replace: true })
       return
     }
 
-    const cur = getLockState()
-    const failed = (cur?.cccd === cccd ? (cur.failed ?? 0) : 0) + 1
-    if (failed >= MAX_FAILED) {
-      const lockedUntil = Date.now() + LOCK_MINUTES * 60 * 1000
-      setLockState({ cccd, failed, lockedUntil })
-      setError(`Bạn đã sai ${MAX_FAILED} lần. Tài khoản bị khoá ${LOCK_MINUTES} phút.`)
-    } else {
-      setLockState({ cccd, failed })
-      setError(`${result.message} (Còn ${MAX_FAILED - failed} lần thử)`)
+    // 2b. Đăng nhập sai → increment server-side
+    try {
+      const resp = await callAuthLockout('increment', cccd)
+      if (resp.locked) {
+        setServerLocked(true)
+        setSecondsLeft(resp.remaining_seconds)
+        setError(`Bạn đã sai ${MAX_FAILED} lần. Tài khoản bị khoá ${Math.ceil(resp.remaining_seconds / 60)} phút.`)
+      } else {
+        setError(`${result.message} (Còn ${resp.remaining_attempts} lần thử)`)
+      }
+    } catch (e) {
+      // Edge Function increment fail → vẫn báo lỗi sai MK cho user
+      // eslint-disable-next-line no-console
+      console.warn('[V75] auth-lockout increment thất bại:', e)
+      setError(result.message)
     }
   }
 
@@ -136,6 +151,7 @@ export default function LoginPage() {
                     className="pl-10"
                     value={cccd}
                     onChange={(e) => setCccd(e.target.value.replace(/\D/g, '').slice(0, 12))}
+                    onBlur={() => { if (isValidCccd(cccd)) void checkLockoutForCccd(cccd) }}
                     maxLength={12}
                     required
                   />
@@ -159,7 +175,7 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              <Button type="submit" className="w-full" disabled={submitting || secondsLeft > 0}>
+              <Button type="submit" className="w-full" disabled={submitting || serverLocked}>
                 {submitting ? 'Đang đăng nhập...' : 'Đăng nhập'}
               </Button>
             </form>

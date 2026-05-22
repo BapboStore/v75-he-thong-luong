@@ -2,10 +2,17 @@
  * V75 — Tầng truy cập dữ liệu.
  * Mọi component không gọi supabase trực tiếp cho CRUD nghiệp vụ
  * mà gọi qua module này. Giúp gom lỗi, log, retry tập trung.
+ *
+ * v0.4.0: Đã XOÁ toàn bộ `logActivity` khỏi client. Activity logs nay
+ *         do Postgres trigger `trg_audit_<table>` (migration 005) tự
+ *         động ghi server-side với JWT của caller. Lợi ích:
+ *         - Không bao giờ mất audit (kể cả khi user đóng tab giữa request).
+ *         - Hot-path CRUD không còn chiếm HTTP connection pool cho log.
+ *         - Save batch chấm công nhanh hơn rõ rệt.
  */
-import { supabase } from '@/lib/supabase'
-import { logActivity } from '@/lib/log'
+import { supabase, withTimeout } from '@/lib/supabase'
 import type {
+  ActivityLog,
   AppUser,
   AttendanceDriver,
   AttendanceOffice,
@@ -41,13 +48,7 @@ export async function createDepartment(d: Omit<Department, 'id'>): Promise<Depar
     .select()
     .single()
   if (error) throw error
-  await logActivity({
-    action: 'department.create',
-    entity_type: 'departments',
-    entity_id: (data as Department).id,
-    new_value: data,
-    description: `Tạo phòng ban ${(data as Department).code} - ${(data as Department).name}`,
-  })
+  // v0.4.0: audit đã do trigger `trg_audit_departments` ghi tự động
   return data as Department
 }
 
@@ -59,25 +60,14 @@ export async function updateDepartment(id: string, patch: Partial<Department>): 
     .select()
     .single()
   if (error) throw error
-  await logActivity({
-    action: 'department.update',
-    entity_type: 'departments',
-    entity_id: id,
-    new_value: patch,
-    description: `Cập nhật phòng ban ${(data as Department).code}`,
-  })
+  // v0.4.0: audit đã do trigger `trg_audit_departments` ghi tự động
   return data as Department
 }
 
 export async function setDepartmentActive(id: string, is_active: boolean): Promise<void> {
   const { error } = await supabase.from('departments').update({ is_active }).eq('id', id)
   if (error) throw error
-  await logActivity({
-    action: is_active ? 'department.activate' : 'department.deactivate',
-    entity_type: 'departments',
-    entity_id: id,
-    description: is_active ? 'Kích hoạt phòng ban' : 'Vô hiệu hoá phòng ban',
-  })
+  // v0.4.0: audit đã do trigger ghi tự động (UPDATE departments)
 }
 
 // =============================================================
@@ -104,13 +94,7 @@ export async function listEmployees(filter?: {
 export async function createEmployee(e: Partial<EmployeeFull>): Promise<EmployeeFull> {
   const { data, error } = await supabase.from('employees').insert(e).select().single()
   if (error) throw error
-  await logActivity({
-    action: 'employee.create',
-    entity_type: 'employees',
-    entity_id: (data as EmployeeFull).id,
-    new_value: data,
-    description: `Tạo nhân viên ${(data as EmployeeFull).ho_ten} (${(data as EmployeeFull).cccd})`,
-  })
+  // v0.4.0: audit đã do trigger `trg_audit_employees` ghi tự động
   return data as EmployeeFull
 }
 
@@ -122,13 +106,7 @@ export async function updateEmployee(id: string, patch: Partial<EmployeeFull>): 
     .select()
     .single()
   if (error) throw error
-  await logActivity({
-    action: 'employee.update',
-    entity_type: 'employees',
-    entity_id: id,
-    new_value: patch,
-    description: `Cập nhật nhân viên ${(data as EmployeeFull).ho_ten}`,
-  })
+  // v0.4.0: audit đã do trigger `trg_audit_employees` ghi tự động
   return data as EmployeeFull
 }
 
@@ -158,13 +136,7 @@ export async function listSalaryConfigs(): Promise<SalaryConfig[]> {
 export async function createSalaryConfig(c: Omit<SalaryConfig, 'id' | 'created_at'>): Promise<SalaryConfig> {
   const { data, error } = await supabase.from('salary_config').insert(c).select().single()
   if (error) throw error
-  await logActivity({
-    action: 'salary_config.create',
-    entity_type: 'salary_config',
-    entity_id: (data as SalaryConfig).id,
-    new_value: data,
-    description: `Tạo cấu hình lương hiệu lực ${(data as SalaryConfig).effective_date}`,
-  })
+  // v0.4.0: audit đã do trigger `trg_audit_salary_config` ghi tự động
   return data as SalaryConfig
 }
 
@@ -205,13 +177,7 @@ export async function updateUserRow(id: string, patch: Partial<AppUser>): Promis
     .select()
     .single()
   if (error) throw error
-  await logActivity({
-    action: 'user.update',
-    entity_type: 'users',
-    entity_id: id,
-    new_value: patch,
-    description: `Cập nhật user ${(data as AppUser).cccd}`,
-  })
+  // v0.4.0: audit đã do trigger `trg_audit_users` ghi tự động
   return data as AppUser
 }
 
@@ -276,6 +242,42 @@ export async function upsertAttendance<T extends { id?: string; employee_id: str
   if (error) throw error
 }
 
+/**
+ * Upsert HÀNG LOẠT chấm công.
+ *
+ * v0.3.4: chia chunk 10 row/lần để tránh RLS evaluate quá nhiều row
+ *         trong 1 statement; mỗi chunk bọc `withTimeout(12s)` cho thông báo
+ *         lỗi rõ ràng nếu Supabase chậm. Log chỉ ghi 1 dòng SAU CÙNG, không
+ *         kèm vào hot-path để tránh chiếm connection pool.
+ */
+export async function upsertAttendanceBatch<T extends { id?: string; employee_id: string; month_year: string }>(
+  table: AttTable,
+  rows: T[],
+  conflictKey: string = 'employee_id,month_year',
+): Promise<void> {
+  if (rows.length === 0) return
+
+  const payloads = rows.map((row) => {
+    const p: Record<string, unknown> = { ...row }
+    if (!p.id) delete p.id
+    return p
+  })
+
+  const CHUNK = 10
+  for (let i = 0; i < payloads.length; i += CHUNK) {
+    const slice = payloads.slice(i, i + CHUNK)
+    const { error } = await withTimeout(
+      supabase.from(table).upsert(slice, { onConflict: conflictKey }),
+      12_000,
+      `upsert ${table} (chunk ${i / CHUNK + 1})`,
+    )
+    if (error) throw error
+  }
+
+  // v0.4.0: trigger `trg_audit_<table>` đã ghi 1 dòng/row tự động.
+  // Không cần log gộp client-side nữa.
+}
+
 export async function setAttendanceStatus(
   table: AttTable,
   ids: string[],
@@ -294,11 +296,7 @@ export async function setAttendanceStatus(
   }
   const { error } = await supabase.from(table).update(patch).in('id', ids)
   if (error) throw error
-  await logActivity({
-    action: `${table}.set_status_${status}`,
-    entity_type: table,
-    description: `Đổi trạng thái ${ids.length} bản ghi sang ${status}`,
-  })
+  // v0.4.0: audit đã do trigger `trg_audit_<table>` ghi tự động (UPDATE)
 }
 
 // =============================================================
@@ -363,11 +361,7 @@ export async function upsertSalaryRecords(
     .from('salary_records')
     .upsert(payload, { onConflict: 'employee_id,month_year' })
   if (error) throw error
-  await logActivity({
-    action: 'salary_records.upsert',
-    entity_type: 'salary_records',
-    description: `Upsert ${records.length} bản ghi lương (status nháp/cập nhật)`,
-  })
+  // v0.4.0: audit đã do trigger `trg_audit_salary_records` ghi tự động
 }
 
 export async function setSalaryRecordsStatus(
@@ -391,11 +385,209 @@ export async function setSalaryRecordsStatus(
     .update(patch)
     .in('id', ids)
   if (error) throw error
-  await logActivity({
-    action: `salary_records.set_status_${status}`,
-    entity_type: 'salary_records',
-    description: `Đổi trạng thái ${ids.length} bản ghi lương sang ${status}`,
+  // v0.4.0: audit đã do trigger `trg_audit_salary_records` ghi tự động (UPDATE)
+}
+
+// =============================================================
+// ACTIVITY LOGS (Module 5 — phiên 8)
+// =============================================================
+
+export interface ActivityLogFilter {
+  /** CCCD người gây hành động (exact match, prefix bằng ilike) */
+  user_cccd?: string | null
+  /** Loại bảng (entity_type column) — insert/update/delete đều mang `TG_TABLE_NAME` */
+  entity_type?: string | null
+  /** Tiền tố action: `insert`, `update`, `delete` (server lưu `<op>.<table>`) */
+  op?: 'insert' | 'update' | 'delete' | null
+  /** Lọc theo ngày (ISO 'YYYY-MM-DD'). dateFrom inclusive, dateTo lấy đến hết 23:59:59. */
+  dateFrom?: string | null
+  dateTo?: string | null
+}
+
+export interface ActivityLogPage {
+  rows: ActivityLog[]
+  /** Tổng số dòng theo filter (HEAD count) — dùng cho pagination. */
+  total: number
+}
+
+/**
+ * Đọc activity_logs với filter + paginate.
+ *
+ * RLS `logs_admin_select` đã chặn từ DB: chỉ admin_he_thong gọi được.
+ * Caller không cần check role lại, nhưng UI vẫn nên guard route trước cho UX.
+ *
+ * Trả về `{ rows, total }`. `total` dùng cho UI hiển thị "1–50 / 312".
+ */
+export async function fetchActivityLogs(
+  filter: ActivityLogFilter,
+  pagination: { limit: number; offset: number },
+): Promise<ActivityLogPage> {
+  let q = supabase
+    .from('activity_logs')
+    .select('*', { count: 'exact' })
+    .order('created_at', { ascending: false })
+
+  if (filter.user_cccd && filter.user_cccd.trim()) {
+    q = q.ilike('user_cccd', `${filter.user_cccd.trim()}%`)
+  }
+  if (filter.entity_type) {
+    q = q.eq('entity_type', filter.entity_type)
+  }
+  if (filter.op) {
+    // action format: '<op>.<table>' → lọc bằng prefix
+    q = q.ilike('action', `${filter.op}.%`)
+  }
+  if (filter.dateFrom) {
+    q = q.gte('created_at', `${filter.dateFrom}T00:00:00.000Z`)
+  }
+  if (filter.dateTo) {
+    q = q.lte('created_at', `${filter.dateTo}T23:59:59.999Z`)
+  }
+
+  q = q.range(pagination.offset, pagination.offset + pagination.limit - 1)
+
+  const { data, error, count } = await q
+  if (error) throw error
+  return {
+    rows: (data ?? []) as ActivityLog[],
+    total: count ?? 0,
+  }
+}
+
+// =============================================================
+// PROMOTIONS / TNVK (Module 5 — phiên 11)
+// =============================================================
+
+/** Một dòng trả về từ RPC `check_upcoming_promotions(p_days_ahead)` (migration 008). */
+export interface UpcomingPromotionRow {
+  employee_id: string
+  cccd: string
+  ho_ten: string
+  ngach_code: string
+  bac: number
+  ngay_huong_bac: string
+  next_promotion_date: string
+  days_remaining: number
+}
+
+/**
+ * Lấy danh sách NV đến hạn nâng bậc trong N ngày tới (mặc định 30).
+ * Gọi function PostgreSQL `public.check_upcoming_promotions(p_days_ahead)`.
+ * Function đã GRANT EXECUTE cho `authenticated`, chỉ trả NV `status='dang_lam_viec'`
+ * và NV CHƯA ở bậc cuối (RULE-02).
+ */
+export async function listUpcomingPromotions(daysAhead: number = 30): Promise<UpcomingPromotionRow[]> {
+  const { data, error } = await supabase.rpc('check_upcoming_promotions', { p_days_ahead: daysAhead })
+  if (error) throw error
+  return (data ?? []) as UpcomingPromotionRow[]
+}
+
+/**
+ * Nâng bậc 1 NV: bac += 1 + ngay_huong_bac = today.
+ * Caller phải xác nhận trước. Trigger `trg_audit_employees` sẽ ghi audit
+ * server-side, không cần logActivity từ client.
+ *
+ * Validate: bậc mới phải tồn tại trong salary_grades cùng ngach_code; nếu
+ * không, trả error rõ ràng cho UI. UI cũng nên disable nút Nâng bậc khi
+ * `is_bac_cuoi = TRUE`.
+ */
+export async function promoteEmployee(employeeId: string): Promise<EmployeeFull> {
+  // 1. Lấy NV hiện tại
+  const { data: emp, error: empErr } = await supabase
+    .from('employees')
+    .select('id, ngach_code, bac, ho_ten')
+    .eq('id', employeeId)
+    .maybeSingle()
+  if (empErr) throw empErr
+  if (!emp) throw new Error('Không tìm thấy nhân viên.')
+  if (emp.bac == null) throw new Error('NV chưa có bậc hiện tại, không thể nâng bậc.')
+
+  const newBac = (emp.bac as number) + 1
+
+  // 2. Verify bậc mới có trong salary_grades
+  const { data: grade, error: gErr } = await supabase
+    .from('salary_grades')
+    .select('id, bac, is_bac_cuoi')
+    .eq('ngach_code', emp.ngach_code)
+    .eq('bac', newBac)
+    .maybeSingle()
+  if (gErr) throw gErr
+  if (!grade) {
+    throw new Error(
+      `Ngạch "${emp.ngach_code}" không có bậc ${newBac}. NV "${emp.ho_ten}" có thể đã ở bậc cao nhất.`,
+    )
+  }
+
+  // 3. Update employees
+  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+  const { data, error } = await supabase
+    .from('employees')
+    .update({ bac: newBac, ngay_huong_bac: today })
+    .eq('id', employeeId)
+    .select()
+    .single()
+  if (error) throw error
+  return data as EmployeeFull
+}
+
+// =============================================================
+// ADMIN — Reset password (Edge Function, phiên 11)
+// =============================================================
+
+/** Response từ Edge Function `auth-lockout` (phiên 11). */
+export interface AuthLockoutResponse {
+  ok: true
+  locked: boolean
+  failed_attempts: number
+  remaining_seconds: number
+  remaining_attempts: number
+}
+
+/**
+ * Gọi Edge Function `auth-lockout` để KIỂM TRA / TĂNG / RESET đếm số lần
+ * đăng nhập sai server-side. Không bị bypass bằng F5/clear localStorage
+ * như client-side cũ.
+ *
+ * - action='check'     : đọc trạng thái lock hiện tại (không sửa).
+ * - action='increment' : tăng failed_attempts; tự lock nếu >= 5.
+ * - action='reset'     : xoá failed_attempts (gọi sau login thành công).
+ */
+export async function callAuthLockout(
+  action: 'check' | 'increment' | 'reset',
+  cccd: string,
+): Promise<AuthLockoutResponse> {
+  const { data, error } = await supabase.functions.invoke('auth-lockout', {
+    body: { action, cccd },
   })
+  if (error) {
+    throw new Error(error.message || `auth-lockout (${action}) thất bại.`)
+  }
+  if (!data?.ok) {
+    throw new Error((data as { error?: string })?.error || 'auth-lockout trả response không hợp lệ.')
+  }
+  return data as AuthLockoutResponse
+}
+
+/**
+ * Gọi Edge Function `admin-reset-password` để reset MK 1 user về `8888V75`
+ * + set must_change_password=true. Edge Function dùng service_role key
+ * server-side, không expose key ra client.
+ *
+ * Edge Function tự verify caller là admin_he_thong (đọc JWT). Nếu không
+ * phải admin → trả 403.
+ */
+export async function adminResetPassword(targetUserId: string): Promise<{ ok: true; cccd: string } | never> {
+  const { data, error } = await supabase.functions.invoke('admin-reset-password', {
+    body: { user_id: targetUserId },
+  })
+  if (error) {
+    // Edge Function trả message lỗi qua context khi status != 2xx
+    throw new Error(error.message || 'Reset mật khẩu thất bại.')
+  }
+  if (!data?.ok) {
+    throw new Error(data?.error || 'Reset mật khẩu thất bại (không rõ lý do).')
+  }
+  return data as { ok: true; cccd: string }
 }
 
 /** Cập nhật cờ is_matched cho cặp 2 nguồn lái xe theo công thức RULE-06 */

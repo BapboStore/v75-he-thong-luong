@@ -11,7 +11,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   listAttendanceDriver, listAttendanceOffice, listAttendanceSecurity, listAttendanceTechnician,
-  listDepartments, listEmployees, refreshDriverMatch, setAttendanceStatus, upsertAttendance,
+  listDepartments, listEmployees, refreshDriverMatch, setAttendanceStatus, upsertAttendanceBatch,
 } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -280,14 +280,13 @@ function OfficeGrid({ deptId, monthYear, employees, canEdit, onError, onInfo }: 
   const saveAll = async (newStatus?: AttendanceStatus) => {
     setBusy(true); onError(null); onInfo(null)
     try {
-      const list = Object.values(rows)
-      for (const r of list) {
-        if (r.status === 'locked') continue
-        await upsertAttendance('attendance_office', { ...r, status: newStatus ?? r.status })
-      }
+      const toSave = Object.values(rows)
+        .filter(r => r.status !== 'locked')
+        .map(r => ({ ...r, status: newStatus ?? r.status }))
+      await upsertAttendanceBatch('attendance_office', toSave)
       onInfo(newStatus
-        ? `Đã chuyển ${list.length} bản ghi sang trạng thái ${ATT_STATUS_LABEL[newStatus]}.`
-        : `Đã lưu ${list.length} bản ghi.`)
+        ? `Đã chuyển ${toSave.length} bản ghi sang trạng thái ${ATT_STATUS_LABEL[newStatus]}.`
+        : `Đã lưu ${toSave.length} bản ghi.`)
       await load()
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Lưu thất bại.')
@@ -417,14 +416,13 @@ function SecurityGrid({ deptId, monthYear, employees, canEdit, onError, onInfo }
   const saveAll = async (newStatus?: AttendanceStatus) => {
     setBusy(true); onError(null); onInfo(null)
     try {
-      const list = Object.values(rows)
-      for (const r of list) {
-        if (r.status === 'locked') continue
-        await upsertAttendance('attendance_security', { ...r, status: newStatus ?? r.status })
-      }
+      const toSave = Object.values(rows)
+        .filter(r => r.status !== 'locked')
+        .map(r => ({ ...r, status: newStatus ?? r.status }))
+      await upsertAttendanceBatch('attendance_security', toSave)
       onInfo(newStatus
-        ? `Đã chuyển ${list.length} bản ghi sang ${ATT_STATUS_LABEL[newStatus]}.`
-        : `Đã lưu ${list.length} bản ghi.`)
+        ? `Đã chuyển ${toSave.length} bản ghi sang ${ATT_STATUS_LABEL[newStatus]}.`
+        : `Đã lưu ${toSave.length} bản ghi.`)
       await load()
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Lưu thất bại.')
@@ -537,14 +535,13 @@ function TechnicianGrid({ deptId, monthYear, employees, canEdit, onError, onInfo
   const saveAll = async (newStatus?: AttendanceStatus) => {
     setBusy(true); onError(null); onInfo(null)
     try {
-      const list = Object.values(rows)
-      for (const r of list) {
-        if (r.status === 'locked') continue
-        await upsertAttendance('attendance_technician', { ...r, status: newStatus ?? r.status })
-      }
+      const toSave = Object.values(rows)
+        .filter(r => r.status !== 'locked')
+        .map(r => ({ ...r, status: newStatus ?? r.status }))
+      await upsertAttendanceBatch('attendance_technician', toSave)
       onInfo(newStatus
-        ? `Đã chuyển ${list.length} bản ghi sang ${ATT_STATUS_LABEL[newStatus]}.`
-        : `Đã lưu ${list.length} bản ghi.`)
+        ? `Đã chuyển ${toSave.length} bản ghi sang ${ATT_STATUS_LABEL[newStatus]}.`
+        : `Đã lưu ${toSave.length} bản ghi.`)
       await load()
     } catch (e) { onError(e instanceof Error ? e.message : 'Lưu thất bại.') }
     finally { setBusy(false) }
@@ -697,9 +694,8 @@ function DriverGrid({
           toSave.push({ ...target, status: newStatus ?? target.status })
         }
       }
-      for (const r of toSave) {
-        await upsertAttendance('attendance_driver', r, 'employee_id,month_year,source')
-      }
+      // Batch upsert 1 request — driver dùng conflict key đặc biệt (3 cột)
+      await upsertAttendanceBatch('attendance_driver', toSave, 'employee_id,month_year,source')
       // Sau khi lưu, chạy đối chiếu chéo 2 nguồn
       const result = await refreshDriverMatch(deptId, monthYear)
       onInfo(`Đã lưu ${toSave.length} bản ghi nguồn ${editableSource}. Đối chiếu: khớp ${result.matched}, lệch ${result.mismatched}.`)
