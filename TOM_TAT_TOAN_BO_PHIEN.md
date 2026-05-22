@@ -1,6 +1,6 @@
 # V75 Hệ thống lương — Tóm tắt toàn bộ phiên làm việc
 
-> Bàn giao tổng hợp tính đến hết phiên 12 (2026-05-22). Đọc file này đầu mỗi phiên mới để có đầy đủ context.
+> Bàn giao tổng hợp tính đến hết phiên 14 (2026-05-22). Đọc file này đầu mỗi phiên mới để có đầy đủ context.
 
 ---
 
@@ -15,8 +15,8 @@
 | Host | Netlify site `luminous-marigold-a337b6` → https://luminous-marigold-a337b6.netlify.app/ |
 | Deploy | `netlify deploy --prod --dir=dist` (đã `netlify link` site, không cần lại) |
 | Git | **Chỉ local**, chưa có GitHub remote |
-| Version hiện tại trong folder | **0.8.0** (PromotionsPage + Edge Function reset PW + auth-lockout server-side) — **ĐÃ DEPLOY** |
-| Version deploy gần nhất xác nhận | **0.8.0** (smoke test E1-E5 PASS — giữa phiên 11 và 12) |
+| Version hiện tại trong folder | **0.10.0** (Xóa user + Audit log) — **CHƯA DEPLOY** (chạy `.\deploy_v0100.ps1`) |
+| Version deploy gần nhất xác nhận | **0.9.0** (smoke test PASS — phiên 13) |
 | Git | **1 commit v0.3.0** + **1 commit v0.4.0-v0.8.0** (local). **Phiên 12**: kết nối GitHub remote + Netlify auto-deploy |
 | Migration 005 (audit triggers) | ✓ Đã re-apply giữa phiên 7 và 8 (user xác nhận log mới ghi được). |
 | Migration 006 (tối ưu audit) | ✓ Đã re-apply, log không còn rác no-op. |
@@ -394,6 +394,47 @@ Không cần `.\deploy_v0xx.ps1` thủ công nữa.
 - **Chờ user**: kết nối Netlify với GitHub repo (Site config → Build & deploy → Connect to Git) + set 2 env vars (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`).
 - Sau đó smoke test bằng 1 commit nhỏ → verify Netlify tự build.
 
+### Phiên 13 — UI tạo tài khoản từ /users (v0.9.0)
+
+**Bối cảnh**: v0.8.0 đã deploy + CI/CD GitHub → Netlify đã hoạt động.
+
+**Việc đã làm**:
+- **`supabase/functions/admin-create-user/index.ts`** — Edge Function mới: verify JWT caller=admin_he_thong, validate CCCD (9–12 chữ số), kiểm tra CCCD chưa tồn tại, tạo auth.users (email=cccd@v75.local, MK=8888V75, email_confirm=true), insert public.users, rollback auth nếu insert lỗi.
+- **`src/lib/api.ts`** — thêm `interface CreateUserPayload` + `adminCreateUser()`.
+- **`src/pages/UsersPage.tsx`** — nút Thêm tài khoản (UserPlus), `CreateUserForm` với validate realtime, state `openCreate`/`createForm`/`creating`, memo `freeEmployees` (NV chưa liên kết).
+- Bump 0.8.0 → 0.9.0.
+
+**File mới**: `supabase/functions/admin-create-user/index.ts`, `HUONG_DAN_PHIEN_13.md`, `deploy_v090.ps1`.
+
+**Trạng thái**: ✓ Deploy + smoke test PASS.
+
+### Phiên 14 — Xóa user từ UI + Audit log tạo user (v0.10.0)
+
+**Bối cảnh**: v0.9.0 đã deploy OK.
+
+**Việc đã làm**:
+
+1. **`supabase/functions/admin-create-user/index.ts`** (cập nhật):
+   - Select thêm `cccd` của caller ở bước 3.
+   - Thêm bước 8: fire-and-forget INSERT `activity_logs` với `action='admin.create_user'`, `entity_type='users'`, `entity_id=newAuthId`, `new_value={cccd, role, department_id, employee_id}`.
+
+2. **`supabase/functions/admin-delete-user/index.ts`** (mới):
+   - Verify JWT caller = admin_he_thong.
+   - Bảo vệ: không xóa chính mình; không xóa nếu target là admin_he_thong duy nhất đang active.
+   - Xóa `public.users` trước → xóa `auth.users` (auth.admin.deleteUser).
+   - Nếu bước auth lỗi: ghi log `admin.delete_user_auth_failed` để admin biết cần xử lý thủ công.
+   - Ghi audit log `admin.delete_user` khi thành công.
+
+3. **`src/lib/api.ts`** — thêm `adminDeleteUser(targetUserId)`.
+
+4. **`src/pages/UsersPage.tsx`** — import `Trash2` + `adminDeleteUser`; thêm state `deleteTarget`/`deleting`; nút Trash2 đỏ trong bảng (ẩn khi `u.id === myId`); confirm dialog với cảnh báo destructive + gợi ý vô hiệu hóa thay thế.
+
+5. Bump 0.9.0 → 0.10.0. Sidebar label `v0.10.0 – Xóa user + Audit log`.
+
+**File mới**: `supabase/functions/admin-delete-user/index.ts` + `deno.json`, `HUONG_DAN_PHIEN_14.md`, `deploy_v0100.ps1`.
+
+**Trạng thái**: Code trong folder, **CHƯA DEPLOY**. Chạy `.\deploy_v0100.ps1` để deploy.
+
 ---
 
 ## V. KIẾN TRÚC FILE HIỆN TẠI
@@ -409,8 +450,14 @@ supabase/
 │   ├── 005_audit_triggers.sql        ✓ Re-applied giữa phiên 7 và 8 (user xác nhận log mới ghi đủ).
 │   ├── 006_audit_optimize.sql        ✓ Re-applied — DROP trg_audit_users + WHEN clause UPDATE bỏ no-op.
 │   └── 007_log_cleanup_cron.sql      ⏳ CHƯA APPLY — pg_cron clean activity_logs > 6 tháng (phiên 9).
+├── functions/
+│   ├── _shared/cors.ts               CORS headers dùng chung
+│   ├── admin-create-user/            ✓ Deploy v0.9.0 + audit log v0.10.0
+│   ├── admin-delete-user/            ⏳ Mới v0.10.0 — chưa deploy
+│   ├── admin-reset-password/         ✓ Deploy v0.8.0
+│   └── auth-lockout/                 ✓ Deploy v0.8.0
 └── scripts/
-    └── seed-users.mjs                 ✓ Đã chạy
+    └── seed-users.mjs                 ✓ Đã chạy (không cần dùng nữa, có UI tạo user)
 ```
 
 ### Frontend
@@ -528,10 +575,15 @@ Sau khi CI/CD OK, chọn 1 trong:
 ### ✓ Đã làm phiên 12 — Hạ tầng CI/CD
 - Git commit toàn bộ v0.4.0-v0.8.0. Script + guide kết nối GitHub remote + Netlify auto-deploy.
 
-### Ưu tiên 1 (phiên 13) — UI tạo user mới
-- **Edge Function `admin-create-user`**: admin_he_thong tạo user mới từ /users (auth.admin.createUser + insert public.users). Bỏ seed-users.mjs thủ công.
+### ✓ Đã làm phiên 13 — UI tạo user mới (v0.9.0)
+- Edge Function `admin-create-user` + nút Thêm tài khoản trong UsersPage. Validate CCCD client+server, rollback auth nếu insert DB lỗi, dropdown freeEmployees.
 
-### Ưu tiên 2 — Module 6 báo cáo
+### ✓ Đã làm phiên 14 — Xóa user + Audit log (v0.10.0)
+- **Audit log tạo user**: `admin-create-user` thêm INSERT `activity_logs` action=`admin.create_user` sau tạo thành công (fire-and-forget).
+- **Edge Function `admin-delete-user`**: xóa public.users + auth.users, bảo vệ không xóa chính mình / admin duy nhất, audit log `admin.delete_user`.
+- **UsersPage**: nút Trash2 đỏ + confirm dialog cảnh báo không thể hoàn tác + gợi ý vô hiệu hóa thay thế.
+
+### Ưu tiên 1 (phiên 15) — Module 6 báo cáo
 - Tổng hợp bảng lương theo phòng ban / tháng / năm. Biểu đồ cột/đường (recharts). Export Excel tổng hợp.
 
 ### Ưu tiên 3 — Cải thiện còn lại
@@ -563,6 +615,8 @@ Sau khi CI/CD OK, chọn 1 trong:
 | 0.6.0 | Module 5 mở rộng: `src/lib/excel.ts` (SheetJS + CSV) + nút Xuất Excel ở SalaryPage + nút Xuất CSV ở LogsPage + Migration 007 pg_cron job clean log > 6 tháng | ✓ Deploy + apply 007 OK (giữa phiên 9 và 10) |
 | 0.7.0 | Module 5 hoàn thiện: `src/lib/pdf.ts` (jsPDF + html2canvas, A5 dọc) + nút Xuất PDF ở PayslipPage + Migration 008 cron `v75_monthly_tnvk_promotion` chạy đầu mỗi tháng (recalc TNVK NV bậc cuối + cảnh báo nâng bậc 30 ngày) | ✓ Deploy + apply 008 OK (giữa phiên 10 và 11) |
 | **0.8.0** | **Phiên 11**: (1) Trang `/promotions` UI quản lý nâng bậc TNVK cho admin_luong (gọi `check_upcoming_promotions`, nút Nâng bậc làm `bac+=1` + `ngay_huong_bac=today`). (2) Edge Function `admin-reset-password` reset MK về `8888V75` từ UsersPage (icon KeyRound). (3) Edge Function `auth-lockout` đếm `failed_attempts` SERVER-SIDE (không bị bypass F5). LoginPage refactor bỏ STORAGE_KEY client-side. KHÔNG thêm dependency npm. | ✓ Deploy + smoke test E1-E5 PASS (giữa phiên 11 và 12) |
+| 0.9.0 | **Phiên 13**: Edge Function `admin-create-user` + UI Thêm tài khoản trong `/users`. Validate CCCD, rollback auth nếu insert DB lỗi. `freeEmployees` memo chỉ hiện NV chưa có tài khoản. | ✓ Deploy + smoke test PASS |
+| **0.10.0** | **Phiên 14**: (1) Audit log tạo user — `admin-create-user` thêm bước INSERT `activity_logs` với `action='admin.create_user'` sau khi tạo thành công. (2) Edge Function `admin-delete-user` — xóa hoàn toàn tài khoản (auth + public.users), bảo vệ: không xóa chính mình, không xóa admin_he_thong duy nhất, ghi audit `admin.delete_user`. (3) UsersPage nút Trash2 đỏ + confirm dialog cảnh báo. KHÔNG thêm dependency npm. | ⏳ Chưa deploy — chờ user chạy `.\deploy_v0100.ps1` |
 
 ---
 

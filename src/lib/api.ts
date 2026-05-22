@@ -624,6 +624,32 @@ export async function adminCreateUser(
   return data as { ok: true; cccd: string; user_id: string; message: string }
 }
 
+// ─── admin-delete-user ────────────────────────────────────────────────────────
+
+/**
+ * Gọi Edge Function `admin-delete-user` để xóa hoàn toàn 1 tài khoản:
+ * - Xóa khỏi public.users
+ * - Xóa khỏi Supabase Auth
+ * - Ghi audit log action='admin.delete_user'
+ *
+ * Bảo vệ server-side: không xóa chính mình, không xóa admin_he_thong duy nhất.
+ * Chỉ admin_he_thong được gọi (Edge Function verify JWT).
+ */
+export async function adminDeleteUser(
+  targetUserId: string,
+): Promise<{ ok: true; cccd: string; message: string }> {
+  const { data, error } = await supabase.functions.invoke('admin-delete-user', {
+    body: { user_id: targetUserId },
+  })
+  if (error) {
+    throw new Error(error.message || 'Xóa tài khoản thất bại.')
+  }
+  if (!data?.ok) {
+    throw new Error(data?.error || 'Xóa tài khoản thất bại (không rõ lý do).')
+  }
+  return data as { ok: true; cccd: string; message: string }
+}
+
 /** Cập nhật cờ is_matched cho cặp 2 nguồn lái xe theo công thức RULE-06 */
 export async function refreshDriverMatch(department_id: string, month_year: string): Promise<{
   matched: number

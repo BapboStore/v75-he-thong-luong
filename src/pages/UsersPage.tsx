@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { KeyRound, Pencil, RotateCcw, ShieldCheck, UserPlus } from 'lucide-react'
+import { KeyRound, Pencil, RotateCcw, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -13,7 +13,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  adminCreateUser, adminResetPassword, listDepartments, listEmployees, listUsers, updateUserRow,
+  adminCreateUser, adminDeleteUser, adminResetPassword, listDepartments, listEmployees, listUsers, updateUserRow,
   type CreateUserPayload,
 } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
@@ -183,6 +183,9 @@ export default function UsersPage() {
   // Reset password confirm dialog
   const [resetTarget, setResetTarget] = useState<AppUser | null>(null)
   const [resetting, setResetting] = useState(false)
+  // Delete user confirm dialog
+  const [deleteTarget, setDeleteTarget] = useState<AppUser | null>(null)
+  const [deleting, setDeleting] = useState(false)
   // Create user dialog
   const [openCreate, setOpenCreate] = useState(false)
   const [createForm, setCreateForm] = useState<CreateFormState>({
@@ -291,6 +294,21 @@ export default function UsersPage() {
     }
   }
 
+  const onConfirmDelete = async () => {
+    if (!deleteTarget) return
+    setDeleting(true); setError(null); setInfo(null)
+    try {
+      const resp = await adminDeleteUser(deleteTarget.id)
+      setInfo(resp.message)
+      setDeleteTarget(null)
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Xóa tài khoản thất bại.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const onConfirmResetPassword = async () => {
     if (!resetTarget) return
     setResetting(true); setError(null); setInfo(null)
@@ -318,7 +336,8 @@ export default function UsersPage() {
           </h1>
           <p className="text-sm text-muted-foreground">
             Chỉ admin_he_thong. Nút <KeyRound className="inline h-3 w-3" /> reset mật khẩu về mặc định <code>8888V75</code>;
-            nút <UserPlus className="inline h-3 w-3" /> tạo tài khoản mới.
+            nút <UserPlus className="inline h-3 w-3" /> tạo tài khoản mới;
+            nút <Trash2 className="inline h-3 w-3 text-destructive" /> xóa tài khoản vĩnh viễn.
           </p>
         </div>
         <Button onClick={onOpenCreate} className="flex items-center gap-2 shrink-0">
@@ -406,6 +425,18 @@ export default function UsersPage() {
                     <Button size="sm" variant="outline" onClick={() => onEdit(u)}>
                       <Pencil className="h-3 w-3" />
                     </Button>
+                    {/* Xóa user — không cho xóa chính mình */}
+                    {u.id !== myId && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setDeleteTarget(u)}
+                        title="Xóa tài khoản"
+                        className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    )}
                   </div>
                 </TableCell>
               </TableRow>
@@ -413,6 +444,54 @@ export default function UsersPage() {
           })}
         </TableBody>
       </Table>
+
+      {/* Confirm delete user dialog */}
+      <Dialog open={deleteTarget !== null} onOpenChange={(o) => { if (!o) setDeleteTarget(null) }}>
+        <DialogContent onClose={() => setDeleteTarget(null)}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="h-5 w-5" /> Xác nhận xóa tài khoản
+            </DialogTitle>
+            <DialogDescription>
+              Hành động này sẽ xóa vĩnh viễn tài khoản khỏi hệ thống (Auth + DB).
+              <strong> Không thể hoàn tác.</strong>
+            </DialogDescription>
+          </DialogHeader>
+          {deleteTarget && (
+            <div className="space-y-3 py-2">
+              <div className="rounded-md bg-muted p-3 text-sm space-y-1">
+                <div><span className="text-muted-foreground">CCCD:</span> <code>{deleteTarget.cccd}</code></div>
+                <div>
+                  <span className="text-muted-foreground">Họ tên:</span>{' '}
+                  <strong>{empByCccd.get(deleteTarget.cccd)?.ho_ten ?? '—'}</strong>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Role:</span>{' '}
+                  <Badge variant={deleteTarget.role === 'admin_he_thong' ? 'destructive' : 'info'}>
+                    {ROLE_LABEL[deleteTarget.role]}
+                  </Badge>
+                </div>
+              </div>
+              <Alert variant="destructive">
+                <AlertTitle>Cảnh báo</AlertTitle>
+                <AlertDescription>
+                  Dữ liệu chấm công, bảng lương, nhật ký liên quan đến tài khoản này sẽ
+                  <strong> không bị xóa</strong> (chỉ mất thông tin đăng nhập).
+                  Nếu muốn vô hiệu hóa tạm thời, hãy dùng nút Sửa và tắt <em>Tài khoản hoạt động</em>.
+                </AlertDescription>
+              </Alert>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+              Huỷ
+            </Button>
+            <Button type="button" variant="destructive" onClick={onConfirmDelete} disabled={deleting}>
+              {deleting ? 'Đang xóa...' : 'Xác nhận xóa vĩnh viễn'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Confirm reset password dialog */}
       <Dialog open={resetTarget !== null} onOpenChange={(o) => { if (!o) setResetTarget(null) }}>

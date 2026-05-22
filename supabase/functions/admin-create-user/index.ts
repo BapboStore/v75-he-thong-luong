@@ -33,7 +33,12 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 // @ts-expect-error Deno imports
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4'
-import { corsHeaders } from '../_shared/cors.ts'
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
 
 const DEFAULT_PASSWORD = '8888V75'
 const VALID_ROLES = ['user', 'truong_phong', 'admin_luong', 'admin_he_thong'] as const
@@ -90,7 +95,7 @@ serve(async (req: Request) => {
 
     const { data: callerRow, error: roleErr } = await adminClient
       .from('users')
-      .select('role')
+      .select('role, cccd')
       .eq('id', callerAuth.user.id)
       .maybeSingle()
 
@@ -167,6 +172,23 @@ serve(async (req: Request) => {
       await adminClient.auth.admin.deleteUser(newAuthId)
       return json({ ok: false, error: `Tạo Auth OK nhưng insert public.users thất bại: ${dbErr.message}. Đã rollback Auth user.` }, 500)
     }
+
+    // ===== 8. Ghi audit log =====
+    // Fire-and-forget — không để lỗi log chặn response thành công
+    void (async () => {
+      try {
+        await adminClient.from('activity_logs').insert({
+          user_cccd: callerRow.cccd ?? null,
+          action: 'admin.create_user',
+          entity_type: 'users',
+          entity_id: newAuthId,
+          old_value: null,
+          new_value: { cccd, role, department_id: department_id ?? null, employee_id: employee_id ?? null },
+        })
+      } catch (_e) {
+        // Bỏ qua lỗi log — không làm thất bại request
+      }
+    })()
 
     return json({
       ok: true,

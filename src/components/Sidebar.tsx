@@ -39,7 +39,7 @@ export function Sidebar() {
         <div className="h-9 w-9 rounded-lg bg-primary text-primary-foreground flex items-center justify-center text-sm font-bold">V75</div>
         <div>
           <div className="text-sm font-semibold leading-tight">Hệ thống Lương</div>
-          <div className="text-[11px] text-muted-foreground">v0.9.0 – Tạo tài khoản từ UI</div>
+          <div className="text-[11px] text-muted-foreground">v0.10.0 – Xóa user + Audit log</div>
         </div>
       </div>
 
