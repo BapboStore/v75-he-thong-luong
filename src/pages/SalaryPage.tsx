@@ -35,6 +35,13 @@ import {
 
 interface AdjMap { [employeeId: string]: PayrollAdjustments }
 
+/** Trích message từ Error hoặc PostgrestError (không phải instanceof Error). */
+function extractMsg(e: unknown, fallback: string): string {
+  if (e instanceof Error) return e.message
+  if (e && typeof e === 'object' && 'message' in e) return String((e as { message: unknown }).message)
+  return fallback
+}
+
 function thisMonth(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}`
@@ -95,7 +102,8 @@ export default function SalaryPage() {
         if (lockedDept) setDeptId(lockedDept)
         else if (d.length > 0 && !deptId) setDeptId(d[0].id)
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Không tải được danh mục.')
+        console.error('[SalaryPage/initLoad]', err)
+        setError(extractMsg(err, 'Không tải được danh mục.'))
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,7 +137,8 @@ export default function SalaryPage() {
       }
       setAdj(m)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Không tải được dữ liệu.')
+      console.error('[SalaryPage/reload]', e)
+      setError(extractMsg(e, 'Không tải được dữ liệu.'))
     } finally {
       setBusy(false)
     }
@@ -258,7 +267,8 @@ export default function SalaryPage() {
       setInfo(`Đã ${asPending ? 'tính + gửi duyệt' : 'tính + lưu nháp'} ${recs.length} bảng lương${skipped ? ` (bỏ qua ${skipped} bản đã duyệt)` : ''}.`)
       await reload()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Tính lương thất bại.')
+      console.error('[SalaryPage/calcAndSaveAll]', e)
+      setError(extractMsg(e, 'Tính lương thất bại.'))
     } finally { setBusy(false) }
   }
 
@@ -272,8 +282,10 @@ export default function SalaryPage() {
       await setSalaryRecordsStatus(ids, 'approved', { approved_by: profile?.user.id })
       setInfo(`Đã duyệt ${ids.length} bảng lương.`)
       await reload()
-    } catch (e) { setError(e instanceof Error ? e.message : 'Duyệt thất bại.') }
-    finally { setBusy(false) }
+    } catch (e) {
+      console.error('[SalaryPage/approveAll]', e)
+      setError(extractMsg(e, 'Duyệt thất bại.'))
+    } finally { setBusy(false) }
   }
 
   const openCancel = (ids: string[]) => setCancelDialog({ open: true, ids, reason: '' })
@@ -289,8 +301,10 @@ export default function SalaryPage() {
       setInfo(`Đã huỷ ${cancelDialog.ids.length} bảng lương.`)
       setCancelDialog({ open: false, ids: [], reason: '' })
       await reload()
-    } catch (e) { setError(e instanceof Error ? e.message : 'Huỷ thất bại.') }
-    finally { setBusy(false) }
+    } catch (e) {
+      console.error('[SalaryPage/submitCancel]', e)
+      setError(extractMsg(e, 'Huỷ thất bại.'))
+    } finally { setBusy(false) }
   }
 
   // Tính tổng các cột để hiển thị footer
@@ -385,7 +399,8 @@ export default function SalaryPage() {
               })
               setInfo(`Đã xuất Excel ${records.length} bản lương tháng ${monthYear}.`)
             } catch (e) {
-              setError(e instanceof Error ? e.message : 'Xuất Excel thất bại.')
+              console.error('[SalaryPage/exportExcel]', e)
+              setError(extractMsg(e, 'Xuất Excel thất bại.'))
             }
           }}
           disabled={busy || records.length === 0}
@@ -606,7 +621,7 @@ function AdjustmentDialog({ emp, value, onClose, onSave, preview }: AdjDialogPro
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Huỷ</Button>
+          <Button variant="outline" onClick={onClose}>Hỷy</Button>
           <Button onClick={() => onSave(v)}>
             <Save className="h-4 w-4 mr-1" /> Lưu điều chỉnh
           </Button>
