@@ -352,15 +352,35 @@ export async function upsertSalaryRecords(
   created_by: string | null,
 ): Promise<void> {
   if (records.length === 0) return
-  const payload = records.map((r) => ({
-    ...r,
-    created_by: r.created_by ?? created_by,
-    status: r.status ?? 'draft',
-  }))
-  const { error } = await supabase
-    .from('salary_records')
-    .upsert(payload, { onConflict: 'employee_id,month_year' })
-  if (error) throw error
+
+  // PostgREST normalize toàn bộ batch thành 1 INSERT với union tất cả cột.
+  // Nếu batch chứa cả bản cũ (có id) lẫn bản mới (không id), các bản mới
+  // sẽ bị gán id=NULL → vi phạm NOT NULL. Fix: tách thành 2 lần gọi.
+  const newRecs    = records.filter(r => r.id == null)
+  const existingRecs = records.filter(r => r.id != null)
+
+  if (newRecs.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const payload = newRecs.map(({ id: _id, ...r }) => ({
+      ...r,
+      created_by: r.created_by ?? created_by,
+      status: r.status ?? 'draft',
+    }))
+    const { error } = await supabase.from('salary_records').insert(payload)
+    if (error) throw error
+  }
+
+  if (existingRecs.length > 0) {
+    const payload = existingRecs.map((r) => ({
+      ...r,
+      created_by: r.created_by ?? created_by,
+      status: r.status ?? 'draft',
+    }))
+    const { error } = await supabase
+      .from('salary_records')
+      .upsert(payload, { onConflict: 'employee_id,month_year' })
+    if (error) throw error
+  }
   // v0.4.0: audit đã do trigger `trg_audit_salary_records` ghi tự động
 }
 
@@ -695,7 +715,7 @@ export async function refreshDriverMatch(department_id: string, month_year: stri
     const al = arr.find(r => r.source === ('admin_luong' as DriverSource))
     if (!tp || !al) {
       // Thiếu nguồn => không match
-      for (const r of arr) {
+           for (const r of arr) {
         if (r.is_matched) {
           await supabase.from('attendance_driver').update({ is_matched: false }).eq('id', r.id)
         }
@@ -707,7 +727,7 @@ export async function refreshDriverMatch(department_id: string, month_year: stri
       's600', 'xe_4_7', 'xe_16_29', 'cong_mia', 'nhan_cong', 'cong_cho',
       'so_km', 'cong_t7cn', 'ngoai_gio', 'le_tet_di_lam', 'le_tet_hoc_phep',
     ]
-    // So sánh sau khi ép kiểu (Supabase NUMERIC có thể trả string)
+    // So sánh sau khi �p kiếu (Supabase NUMERIC có thể trả string)
     const ok = numFields.every(f => Number(tp[f]) === Number(al[f]))
     if (tp.is_matched !== ok || al.is_matched !== ok) {
       await supabase.from('attendance_driver').update({ is_matched: ok }).in('id', [tp.id, al.id])
