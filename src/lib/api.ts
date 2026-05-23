@@ -650,6 +650,31 @@ export async function adminDeleteUser(
   return data as { ok: true; cccd: string; message: string }
 }
 
+// =============================================================
+// REPORTS (Module 6 — phiên 15)
+// =============================================================
+
+/**
+ * Lấy tất cả salary_records cho 1 kỳ lương (không lọc theo phòng).
+ * Dùng cho trang Báo cáo tổng hợp (/reports).
+ * RLS cho phép admin_luong + admin_he_thong SELECT mọi phòng.
+ */
+export async function fetchSalaryReport(
+  month_year: string,
+  status?: SalaryRecordStatus | null,
+): Promise<SalaryRecord[]> {
+  let q = supabase
+    .from('salary_records')
+    .select('*')
+    .eq('month_year', month_year)
+    .order('department_id', { ascending: true })
+    .order('ho_ten', { ascending: true })
+  if (status) q = q.eq('status', status)
+  const { data, error } = await q
+  if (error) throw error
+  return (data ?? []) as SalaryRecord[]
+}
+
 /** Cập nhật cờ is_matched cho cặp 2 nguồn lái xe theo công thức RULE-06 */
 export async function refreshDriverMatch(department_id: string, month_year: string): Promise<{
   matched: number

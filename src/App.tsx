@@ -15,15 +15,7 @@ import SalaryPage from '@/pages/SalaryPage'
 import PayslipPage from '@/pages/PayslipPage'
 import LogsPage from '@/pages/LogsPage'
 import PromotionsPage from '@/pages/PromotionsPage'
-
-function Placeholder({ title }: { title: string }) {
-  return (
-    <div className="space-y-3">
-      <h1 className="text-2xl font-bold">{title}</h1>
-      <p className="text-muted-foreground">Tính năng này sẽ được triển khai ở module tiếp theo.</p>
-    </div>
-  )
-}
+import ReportsPage from '@/pages/ReportsPage'
 
 export default function App() {
   return (
@@ -49,7 +41,7 @@ export default function App() {
             <Route path="employees"   element={<ProtectedRoute roles={['admin_luong','admin_he_thong']}><EmployeesPage /></ProtectedRoute>} />
             <Route path="promotions"  element={<ProtectedRoute roles={['admin_luong','admin_he_thong']}><PromotionsPage /></ProtectedRoute>} />
             <Route path="departments" element={<ProtectedRoute roles={['admin_luong','admin_he_thong']}><DepartmentsPage /></ProtectedRoute>} />
-            <Route path="reports"     element={<ProtectedRoute roles={['admin_luong','admin_he_thong']}><Placeholder title="Báo cáo / Xuất file — Module 5" /></ProtectedRoute>} />
+            <Route path="reports"     element={<ProtectedRoute roles={['admin_luong','admin_he_thong']}><ReportsPage /></ProtectedRoute>} />
             <Route path="users"       element={<ProtectedRoute roles={['admin_he_thong']}><UsersPage /></ProtectedRoute>} />
             <Route path="logs"        element={<ProtectedRoute roles={['admin_he_thong']}><LogsPage /></ProtectedRoute>} />
             <Route path="config"      element={<ProtectedRoute roles={['admin_he_thong']}><ConfigPage /></ProtectedRoute>} />

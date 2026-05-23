@@ -1,7 +1,7 @@
 {
   "name": "v75-he-thong-luong",
   "private": true,
-  "version": "0.10.0",
+  "version": "0.11.0",
   "type": "module",
   "description": "Hệ thống Quản lý Tiền lương V75 – Vite + React + TS + Supabase + Netlify",
   "scripts": {
@@ -22,6 +22,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.27.0",
+    "recharts": "^3.8.1",
     "tailwind-merge": "^2.5.4",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },

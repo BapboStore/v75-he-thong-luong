@@ -1,6 +1,6 @@
 # V75 Hệ thống lương — Tóm tắt toàn bộ phiên làm việc
 
-> Bàn giao tổng hợp tính đến hết phiên 14 (2026-05-22). Đọc file này đầu mỗi phiên mới để có đầy đủ context.
+> Bàn giao tổng hợp tính đến hết phiên 15 (2026-05-23). Đọc file này đầu mỗi phiên mới để có đầy đủ context.
 
 ---
 
@@ -15,8 +15,8 @@
 | Host | Netlify site `luminous-marigold-a337b6` → https://luminous-marigold-a337b6.netlify.app/ |
 | Deploy | `netlify deploy --prod --dir=dist` (đã `netlify link` site, không cần lại) |
 | Git | **Chỉ local**, chưa có GitHub remote |
-| Version hiện tại trong folder | **0.10.0** (Xóa user + Audit log) — **CHƯA DEPLOY** (chạy `.\deploy_v0100.ps1`) |
-| Version deploy gần nhất xác nhận | **0.9.0** (smoke test PASS — phiên 13) |
+| Version hiện tại trong folder | **0.11.0** (Báo cáo tổng hợp + Nâng bậc hàng loạt) — **CHƯA DEPLOY** |
+| Version deploy gần nhất xác nhận | **0.10.0** (smoke test PASS — phiên 14) |
 | Git | **1 commit v0.3.0** + **1 commit v0.4.0-v0.8.0** (local). **Phiên 12**: kết nối GitHub remote + Netlify auto-deploy |
 | Migration 005 (audit triggers) | ✓ Đã re-apply giữa phiên 7 và 8 (user xác nhận log mới ghi được). |
 | Migration 006 (tối ưu audit) | ✓ Đã re-apply, log không còn rác no-op. |
@@ -408,6 +408,53 @@ Không cần `.\deploy_v0xx.ps1` thủ công nữa.
 
 **Trạng thái**: ✓ Deploy + smoke test PASS.
 
+### Phiên 15 — Nâng bậc hàng loạt + Báo cáo tổng hợp lương (v0.11.0)
+
+**Bối cảnh**: v0.10.0 đã deploy + smoke test PASS. Anh chọn 2 hạng mục: nâng bậc hàng loạt + báo cáo tổng hợp lương.
+
+**Việc đã làm**:
+
+1. **`src/pages/PromotionsPage.tsx`** (cập nhật):
+   - State `selectedIds: Set<string>` + `bulkOpen` + `bulkSubmitting` + `bulkProgress`.
+   - Cột checkbox ở bảng: header có `indeterminate` state khi chọn 1 phần; `toggleAll()` chọn/bỏ tất cả.
+   - Nút **Nâng bậc đã chọn (N)** hiện khi có ≥1 NV được tích; disabled khi đang loading.
+   - Bulk confirm dialog: bảng danh sách `selectedRows` (tên + ngạch/bậc cũ → mới + còn lại); cảnh báo không hoàn tác.
+   - `onConfirmBulkPromote`: loop sequential `promoteEmployee()`, cập nhật `bulkProgress` từng bước; tổng hợp ok/fail.
+   - Highlight hàng đang được chọn (`bg-primary/5`).
+
+2. **`src/lib/api.ts`** — thêm:
+   - `fetchSalaryReport(month_year, status?)`: SELECT `salary_records` không lọc phòng, thêm tùy chọn filter status. Dùng cho ReportsPage.
+
+3. **`src/lib/excel.ts`** — thêm:
+   - `DeptSummaryRow` interface (12 trường tổng hợp theo phòng).
+   - `exportSalaryReportToExcel({ summaries, records, monthYear })`: tạo xlsx 2 sheet: "Tổng hợp" (header + bảng phòng + tổng cộng + col widths) + "Chi tiết NV" (tất cả NV rút gọn 6 cột).
+
+4. **`src/pages/ReportsPage.tsx`** (mới) — route `/reports`:
+   - Filter bar: dropdown tháng (24 tháng gần nhất, desc) + dropdown trạng thái.
+   - `load()` dùng `Promise.all([fetchSalaryReport, listDepartments])` — departments cache sau lần đầu.
+   - Aggregate JS-side: `Map<deptId, SalaryRecord[]>` → `DeptSummaryRow[]` theo deptCode alpha.
+   - 4 KPI cards (Tổng NV / Tổng quỹ lương / Tổng thuế TNCN / Tổng thực lĩnh) với `fmtMoneyShort`.
+   - `recharts BarChart` — 3 series: Thực lĩnh (indigo) / Thuế TNCN (amber) / BHXH NLĐ (green); đơn vị triệu đ; tooltip hiện tên phòng đầy đủ.
+   - Bảng 9 cột + dòng TỔNG CỘNG highlight (`bg-muted/50 font-bold`).
+   - Nút Xuất Excel gọi `exportSalaryReportToExcel`.
+
+5. **`src/App.tsx`** — import `ReportsPage`; route `/reports` thay Placeholder thành `<ReportsPage />`. Xóa hàm `Placeholder` không còn dùng.
+
+6. **`package.json`** — bump `0.10.0 → 0.11.0`.
+7. **`src/components/Sidebar.tsx`** — label `v0.11.0 – Báo cáo + Nâng bậc hàng loạt`.
+
+**Files mới phiên 15 (trong folder dự án)**:
+- `src/pages/ReportsPage.tsx`
+- `HUONG_DAN_PHIEN_15.md`
+- `deploy_v0110.ps1`
+
+**Trạng thái cuối phiên 15**:
+- Code v0.11.0 trong folder, **CHƯA BUILD/DEPLOY**. Chạy `.\deploy_v0110.ps1`.
+- **Không có migration DB mới** trong phiên này.
+- recharts đã có trong `node_modules` (từ các phiên trước); không cần `npm install` thêm.
+
+---
+
 ### Phiên 14 — Xóa user từ UI + Audit log tạo user (v0.10.0)
 
 **Bối cảnh**: v0.9.0 đã deploy OK.
@@ -453,7 +500,7 @@ supabase/
 ├── functions/
 │   ├── _shared/cors.ts               CORS headers dùng chung
 │   ├── admin-create-user/            ✓ Deploy v0.9.0 + audit log v0.10.0
-│   ├── admin-delete-user/            ⏳ Mới v0.10.0 — chưa deploy
+│   ├── admin-delete-user/            ✓ Deploy v0.10.0
 │   ├── admin-reset-password/         ✓ Deploy v0.8.0
 │   └── auth-lockout/                 ✓ Deploy v0.8.0
 └── scripts/
@@ -480,11 +527,13 @@ src/
 │   ├── excel.ts                       (v0.6.0) SheetJS + CSV: exportSalaryToExcel, exportLogsToCsv
 │   ├── types.ts                       TypeScript types + (v0.5.0) `ActivityLog`, `parseLogAction`, `LOG_OP_LABEL`, `LOG_ENTITY_TYPES`
 │   └── utils.ts                       Tiện ích chung
-└── pages/                             11 page: Login, Dashboard (v0.4.2 fallback UI),
+└── pages/                             12 page: Login, Dashboard (v0.4.2 fallback UI),
                                        ChangePassword, Employees, Departments, Config, Users,
-                                       Attendance (v0.6.0: nút Xuất Excel ở Salary),
-                                       Salary, Payslip, Unauthorized,
-                                       Logs (v0.5.0 + v0.6.0: nút Xuất CSV)
+                                       Attendance, Salary (v0.6.0: nút Xuất Excel),
+                                       Payslip, Unauthorized,
+                                       Logs (v0.5.0 + v0.6.0: nút Xuất CSV),
+                                       Promotions (v0.11.0: nâng bậc hàng loạt),
+                                       Reports (v0.11.0: Báo cáo tổng hợp + biểu đồ + Excel)
 ```
 
 ### Bàn giao
@@ -583,14 +632,25 @@ Sau khi CI/CD OK, chọn 1 trong:
 - **Edge Function `admin-delete-user`**: xóa public.users + auth.users, bảo vệ không xóa chính mình / admin duy nhất, audit log `admin.delete_user`.
 - **UsersPage**: nút Trash2 đỏ + confirm dialog cảnh báo không thể hoàn tác + gợi ý vô hiệu hóa thay thế.
 
-### Ưu tiên 1 (phiên 15) — Module 6 báo cáo
-- Tổng hợp bảng lương theo phòng ban / tháng / năm. Biểu đồ cột/đường (recharts). Export Excel tổng hợp.
+### ✓ Đã làm phiên 15 — Nâng bậc hàng loạt + Báo cáo tổng hợp lương (v0.11.0)
+- **PromotionsPage** (v0.11.0): checkbox chọn nhiều NV + nút "Nâng bậc đã chọn (N)" + confirm dialog tổng hợp + progress text từng bước + báo cáo thành công/thất bại.
+- **ReportsPage** (/reports): 4 KPI cards (Tổng NV, Tổng quỹ lương, Tổng thuế TNCN, Tổng thực lĩnh) + biểu đồ cột recharts theo phòng + bảng tổng hợp 8 cột + Export Excel 2 sheet.
+- **api.ts**: thêm `fetchSalaryReport(month_year, status?)` lấy toàn bộ salary_records theo kỳ.
+- **excel.ts**: thêm `exportSalaryReportToExcel()` + interface `DeptSummaryRow`. Excel 2 sheet: "Tổng hợp" + "Chi tiết NV".
+- **App.tsx**: route `/reports` thay Placeholder thành `<ReportsPage />`.
+- **Không có migration DB mới** — tận dụng salary_records + departments sẵn có.
 
-### Ưu tiên 3 — Cải thiện còn lại
-- Email cảnh báo khi cron tháng phát hiện NV sắp đến hạn nâng bậc (Resend/SendGrid Edge Function).
-- Audit log action='admin.password_reset' khi Edge Function reset MK.
-- Tolerance NUMERIC `Math.abs(a-b) < 0.001` trong `refreshDriverMatch` thay vì so equality strict.
+### Ưu tiên 1 (phiên 16) — Email cảnh báo cron
+- Edge Function gửi email (Resend/SendGrid) khi cron tháng phát hiện NV sắp đến hạn nâng bậc.
+
+### Ưu tiên 1 (phiên 16) — Email cảnh báo cron
+- Edge Function gửi email (Resend/SendGrid) khi cron tháng phát hiện NV sắp đến hạn nâng bậc.
+
+### Ưu tiên 2 — Cải thiện còn lại
 - Escalated lockout: lần 1 → 5', lần 2 → 15', lần 3 → 1h.
+- Audit log action='admin.password_reset' khi Edge Function reset MK.
+- Báo cáo xu hướng: biểu đồ đường so sánh quỹ lương nhiều tháng.
+- Tolerance NUMERIC `Math.abs(a-b) < 0.001` trong `refreshDriverMatch` thay vì so equality strict.
 
 ---
 
@@ -616,7 +676,8 @@ Sau khi CI/CD OK, chọn 1 trong:
 | 0.7.0 | Module 5 hoàn thiện: `src/lib/pdf.ts` (jsPDF + html2canvas, A5 dọc) + nút Xuất PDF ở PayslipPage + Migration 008 cron `v75_monthly_tnvk_promotion` chạy đầu mỗi tháng (recalc TNVK NV bậc cuối + cảnh báo nâng bậc 30 ngày) | ✓ Deploy + apply 008 OK (giữa phiên 10 và 11) |
 | **0.8.0** | **Phiên 11**: (1) Trang `/promotions` UI quản lý nâng bậc TNVK cho admin_luong (gọi `check_upcoming_promotions`, nút Nâng bậc làm `bac+=1` + `ngay_huong_bac=today`). (2) Edge Function `admin-reset-password` reset MK về `8888V75` từ UsersPage (icon KeyRound). (3) Edge Function `auth-lockout` đếm `failed_attempts` SERVER-SIDE (không bị bypass F5). LoginPage refactor bỏ STORAGE_KEY client-side. KHÔNG thêm dependency npm. | ✓ Deploy + smoke test E1-E5 PASS (giữa phiên 11 và 12) |
 | 0.9.0 | **Phiên 13**: Edge Function `admin-create-user` + UI Thêm tài khoản trong `/users`. Validate CCCD, rollback auth nếu insert DB lỗi. `freeEmployees` memo chỉ hiện NV chưa có tài khoản. | ✓ Deploy + smoke test PASS |
-| **0.10.0** | **Phiên 14**: (1) Audit log tạo user — `admin-create-user` thêm bước INSERT `activity_logs` với `action='admin.create_user'` sau khi tạo thành công. (2) Edge Function `admin-delete-user` — xóa hoàn toàn tài khoản (auth + public.users), bảo vệ: không xóa chính mình, không xóa admin_he_thong duy nhất, ghi audit `admin.delete_user`. (3) UsersPage nút Trash2 đỏ + confirm dialog cảnh báo. KHÔNG thêm dependency npm. | ⏳ Chưa deploy — chờ user chạy `.\deploy_v0100.ps1` |
+| **0.10.0** | **Phiên 14**: (1) Audit log tạo user — `admin-create-user` thêm bước INSERT `activity_logs` với `action='admin.create_user'` sau khi tạo thành công. (2) Edge Function `admin-delete-user` — xóa hoàn toàn tài khoản (auth + public.users), bảo vệ: không xóa chính mình, không xóa admin_he_thong duy nhất, ghi audit `admin.delete_user`. (3) UsersPage nút Trash2 đỏ + confirm dialog cảnh báo. KHÔNG thêm dependency npm. | ✓ Deploy + smoke test PASS |
+| **0.11.0** | **Phiên 15**: (1) PromotionsPage: checkbox chọn nhiều NV + nút "Nâng bậc đã chọn (N)" + bulk confirm dialog + progress text + báo cáo kết quả. (2) ReportsPage (/reports): 4 KPI cards + biểu đồ cột recharts (Thực lĩnh/Thuế/BHXH theo phòng) + bảng tổng hợp 8 cột + Export Excel 2 sheet (Tổng hợp + Chi tiết NV). Không có migration mới, không có Edge Function mới. | ⏳ CHƯA DEPLOY — chạy `.\deploy_v0110.ps1` |
 
 ---
 

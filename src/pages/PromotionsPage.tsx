@@ -1,5 +1,6 @@
 /**
  * /promotions — Quản lý nâng bậc TNVK (Module 5, phiên 11, v0.8.0).
+ * v0.11.0: Thêm nâng bậc hàng loạt (checkbox chọn nhiều NV).
  *
  * Cho admin_luong + admin_he_thong:
  *  - Liệt kê NV sắp đến hạn nâng bậc trong N ngày tới (RULE-02).
@@ -7,13 +8,14 @@
  *  - Slider chọn N (7 / 30 / 60 / 90 / 180 ngày).
  *  - Nút "Nâng bậc": confirm dialog → update employees.bac += 1 + ngay_huong_bac = today.
  *  - Badge màu theo độ khẩn: ≤7 ngày = đỏ; ≤30 = vàng; còn lại = xanh.
+ *  - [v0.11.0] Checkbox chọn nhiều + nút "Nâng bậc đã chọn (N)" bulk action.
  *
  * RLS: function `check_upcoming_promotions` đã GRANT cho `authenticated`,
  *      bảng `employees` UPDATE đã có policy `employees_write_admin` (admin_luong + admin_he_thong).
  *      User thường không thấy menu này nhờ Sidebar filter; route guard cũng chặn.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ArrowUp, Calendar, RotateCw, TrendingUp } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Calendar, CheckSquare, RotateCw, TrendingUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
@@ -51,12 +53,19 @@ export default function PromotionsPage() {
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
 
-  // Confirm dialog
+  // Single promote confirm dialog
   const [target, setTarget] = useState<UpcomingPromotionRow | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
+  // Bulk promote
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkSubmitting, setBulkSubmitting] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null)
+
   const reload = useCallback(async () => {
     setLoading(true); setError(null)
+    setSelectedIds(new Set()) // reset selection on reload
     try {
       const data = await listUpcomingPromotions(daysAhead)
       setRows(data)
@@ -76,6 +85,30 @@ export default function PromotionsPage() {
     return { urgent, soon, later, total: rows.length }
   }, [rows])
 
+  // ─── Checkbox helpers ───────────────────────────────────────────────────────
+
+  const allSelected = rows.length > 0 && selectedIds.size === rows.length
+  const someSelected = selectedIds.size > 0 && selectedIds.size < rows.length
+
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(rows.map(r => r.employee_id)))
+    }
+  }
+
+  const toggleOne = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // ─── Single promote ────────────────────────────────────────────────────────
+
   const onConfirmPromote = async () => {
     if (!target) return
     setSubmitting(true); setError(null); setInfo(null)
@@ -94,6 +127,43 @@ export default function PromotionsPage() {
     }
   }
 
+  // ─── Bulk promote ──────────────────────────────────────────────────────────
+
+  const selectedRows = useMemo(
+    () => rows.filter(r => selectedIds.has(r.employee_id)),
+    [rows, selectedIds],
+  )
+
+  const onConfirmBulkPromote = async () => {
+    if (selectedRows.length === 0) return
+    setBulkSubmitting(true); setError(null); setInfo(null)
+    const ok: string[] = []
+    const fail: string[] = []
+
+    for (let i = 0; i < selectedRows.length; i++) {
+      const r = selectedRows[i]
+      setBulkProgress(`Đang xử lý ${i + 1}/${selectedRows.length}: ${r.ho_ten}…`)
+      try {
+        await promoteEmployee(r.employee_id)
+        ok.push(r.ho_ten)
+      } catch (err) {
+        fail.push(`${r.ho_ten} (${err instanceof Error ? err.message : 'lỗi'})`)
+      }
+    }
+
+    setBulkProgress(null)
+    setBulkOpen(false)
+    setBulkSubmitting(false)
+
+    const parts: string[] = []
+    if (ok.length > 0)   parts.push(`✓ Đã nâng bậc: ${ok.join(', ')}.`)
+    if (fail.length > 0) parts.push(`✗ Thất bại: ${fail.join('; ')}.`)
+    if (ok.length > 0) setInfo(parts.join('  '))
+    else               setError(parts.join('  '))
+
+    await reload()
+  }
+
   return (
     <div className="space-y-4">
       <div>
@@ -101,10 +171,10 @@ export default function PromotionsPage() {
           <TrendingUp className="h-6 w-6 text-primary" /> Quản lý nâng bậc TNVK
         </h1>
         <p className="text-sm text-muted-foreground">
-          Danh sách nhân viên đến hạn nâng bậc theo RULE-02 (`chu_ky_nang_bac_nam`
+          Danh sách nhân viên đến hạn nâng bậc theo RULE-02 (<code>chu_ky_nang_bac_nam</code>{' '}
           của ngạch). Cron tự động chạy đầu mỗi tháng (job{' '}
           <code>v75_monthly_tnvk_promotion</code>) cảnh báo + recalc TNVK cho NV
-          ở bậc cuối; trang này cho phép admin xử lý thủ công.
+          ở bậc cuối; trang này cho phép admin xử lý thủ công — từng NV hoặc hàng loạt.
         </p>
       </div>
 
@@ -143,6 +213,18 @@ export default function PromotionsPage() {
           Tải lại
         </Button>
 
+        {/* Bulk promote button — chỉ hiện khi đã chọn ít nhất 1 */}
+        {selectedIds.size > 0 && (
+          <Button
+            variant="default"
+            onClick={() => setBulkOpen(true)}
+            disabled={loading}
+          >
+            <CheckSquare className="mr-2 h-4 w-4" />
+            Nâng bậc đã chọn ({selectedIds.size})
+          </Button>
+        )}
+
         <div className="ml-auto flex items-center gap-2 text-sm">
           <Badge variant="destructive">Khẩn: {summary.urgent}</Badge>
           <Badge variant="warning">Sắp đến: {summary.soon}</Badge>
@@ -155,6 +237,18 @@ export default function PromotionsPage() {
       <Table>
         <TableHeader>
           <TableRow>
+            {/* Checkbox chọn tất cả */}
+            <TableHead className="w-10">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                ref={(el) => { if (el) el.indeterminate = someSelected }}
+                onChange={toggleAll}
+                disabled={loading || rows.length === 0}
+                className="cursor-pointer"
+                title={allSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+              />
+            </TableHead>
             <TableHead>CCCD</TableHead>
             <TableHead>Họ tên</TableHead>
             <TableHead>Ngạch / Bậc</TableHead>
@@ -171,15 +265,24 @@ export default function PromotionsPage() {
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableEmpty colSpan={8}>Đang tải...</TableEmpty>
+            <TableEmpty colSpan={9}>Đang tải...</TableEmpty>
           ) : rows.length === 0 ? (
-            <TableEmpty colSpan={8}>
+            <TableEmpty colSpan={9}>
               Không có nhân viên nào đến hạn nâng bậc trong {daysAhead} ngày tới.
             </TableEmpty>
           ) : rows.map((r) => {
             const u = urgencyBadge(r.days_remaining)
+            const checked = selectedIds.has(r.employee_id)
             return (
-              <TableRow key={r.employee_id}>
+              <TableRow key={r.employee_id} className={checked ? 'bg-primary/5' : ''}>
+                <TableCell>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleOne(r.employee_id)}
+                    className="cursor-pointer"
+                  />
+                </TableCell>
                 <TableCell className="font-mono text-xs">{r.cccd}</TableCell>
                 <TableCell className="font-medium">{r.ho_ten}</TableCell>
                 <TableCell className="text-sm">
@@ -207,7 +310,7 @@ export default function PromotionsPage() {
         </TableBody>
       </Table>
 
-      {/* Confirm dialog */}
+      {/* Single confirm dialog */}
       <Dialog open={target !== null} onOpenChange={(o) => { if (!o) setTarget(null) }}>
         <DialogContent onClose={() => setTarget(null)}>
           <DialogHeader>
@@ -258,6 +361,85 @@ export default function PromotionsPage() {
             </Button>
             <Button type="button" onClick={onConfirmPromote} disabled={submitting}>
               {submitting ? 'Đang nâng bậc...' : 'Xác nhận nâng bậc'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk promote confirm dialog */}
+      <Dialog open={bulkOpen} onOpenChange={(o) => { if (!o && !bulkSubmitting) setBulkOpen(false) }}>
+        <DialogContent onClose={() => { if (!bulkSubmitting) setBulkOpen(false) }}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckSquare className="h-5 w-5 text-primary" />
+              Xác nhận nâng bậc hàng loạt
+            </DialogTitle>
+            <DialogDescription>
+              Hệ thống sẽ nâng bậc tuần tự cho {selectedRows.length} nhân viên đã chọn.
+              Mỗi NV: <code>bac += 1</code>, <code>ngay_huong_bac = hôm nay</code>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2">
+            {/* Danh sách NV được chọn */}
+            <div className="rounded-md border overflow-auto max-h-48">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-muted border-b">
+                    <th className="text-left px-3 py-1.5 font-medium">Họ tên</th>
+                    <th className="text-left px-3 py-1.5 font-medium">Ngạch / Bậc hiện tại → Mới</th>
+                    <th className="text-right px-3 py-1.5 font-medium">Còn lại</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedRows.map((r) => (
+                    <tr key={r.employee_id} className="border-b last:border-0">
+                      <td className="px-3 py-1.5">{r.ho_ten}</td>
+                      <td className="px-3 py-1.5 text-muted-foreground">
+                        {r.ngach_code} / bậc <strong>{r.bac}</strong>{' → '}
+                        <span className="text-green-600 font-semibold">{r.bac + 1}</span>
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        <span className={r.days_remaining <= 7 ? 'text-destructive font-bold' : ''}>
+                          {r.days_remaining}d
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {bulkProgress && (
+              <p className="text-sm text-muted-foreground animate-pulse">{bulkProgress}</p>
+            )}
+
+            <Alert variant="warning">
+              <AlertTitle>Lưu ý</AlertTitle>
+              <AlertDescription>
+                Thao tác <strong>không thể hoàn tác qua UI</strong>. Nếu có NV nào thất bại
+                (ví dụ đã ở bậc cuối), hệ thống sẽ bỏ qua NV đó và báo cáo sau khi hoàn tất.
+              </AlertDescription>
+            </Alert>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setBulkOpen(false)}
+              disabled={bulkSubmitting}
+            >
+              Huỷ
+            </Button>
+            <Button
+              type="button"
+              onClick={onConfirmBulkPromote}
+              disabled={bulkSubmitting}
+            >
+              {bulkSubmitting
+                ? 'Đang xử lý...'
+                : `Xác nhận nâng bậc ${selectedRows.length} NV`}
             </Button>
           </DialogFooter>
         </DialogContent>

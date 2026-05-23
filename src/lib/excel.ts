@@ -306,3 +306,127 @@ export function exportLogsToCsv({ rows, suffix }: ExportLogsOptions): void {
   const fileName = `NhatKy_${suffix ? safeFileName(suffix) + '_' : ''}${nowStamp()}.csv`
   downloadBlob(blob, fileName)
 }
+
+// =============================================================
+// EXPORT BÁO CÁO TỔNG HỢP LƯƠNG → XLSX (Module 6 — phiên 15)
+// =============================================================
+
+export interface DeptSummaryRow {
+  deptId: string
+  deptName: string
+  deptCode: string
+  soNV: number
+  tongChiuThue: number
+  tongKhongCT: number
+  tongTrichNLD: number
+  tongCDP: number
+  tongThueTNCN: number
+  tongTruyLinh: number
+  tongTruyThu: number
+  tongThucLinh: number
+}
+
+export interface ExportSalaryReportOptions {
+  summaries: DeptSummaryRow[]
+  records: SalaryRecord[]
+  monthYear: string
+}
+
+export function exportSalaryReportToExcel({ summaries, records, monthYear }: ExportSalaryReportOptions): void {
+  if (summaries.length === 0) throw new Error('Không có dữ liệu để xuất.')
+
+  const wb = XLSX.utils.book_new()
+
+  // ─── Sheet 1: Tổng hợp theo phòng ban ──────────────────────────────────────
+  const titleAoA = [
+    [`BÁO CÁO TỔNG HỢP LƯƠNG — KỲ ${monthYear}`],
+    [`Ngày xuất: ${new Date().toLocaleDateString('vi-VN')} ${new Date().toLocaleTimeString('vi-VN')}`],
+    [`Tổng số phòng ban: ${summaries.length} | Tổng số bản lương: ${records.length}`],
+    [],
+  ]
+
+  interface SummaryExcelRow {
+    STT: number
+    'Mã phòng': string
+    'Tên phòng ban': string
+    'Số NV': number
+    'Tổng chịu thuế': number
+    'Tổng không CT': number
+    'BH NLĐ': number
+    CĐP: number
+    'Thuế TNCN': number
+    'Truy lĩnh': number
+    'Truy thu': number
+    'Thực lĩnh': number
+  }
+
+  const summaryRows: SummaryExcelRow[] = summaries.map((s, i) => ({
+    STT: i + 1,
+    'Mã phòng': s.deptCode,
+    'Tên phòng ban': s.deptName,
+    'Số NV': s.soNV,
+    'Tổng chịu thuế': s.tongChiuThue,
+    'Tổng không CT': s.tongKhongCT,
+    'BH NLĐ': s.tongTrichNLD,
+    CĐP: s.tongCDP,
+    'Thuế TNCN': s.tongThueTNCN,
+    'Truy lĩnh': s.tongTruyLinh,
+    'Truy thu': s.tongTruyThu,
+    'Thực lĩnh': s.tongThucLinh,
+  }))
+
+  // Dòng tổng cộng
+  const grandTotalRow: SummaryExcelRow = {
+    STT: 0,
+    'Mã phòng': '',
+    'Tên phòng ban': 'TỔNG CỘNG',
+    'Số NV': summaries.reduce((s, r) => s + r.soNV, 0),
+    'Tổng chịu thuế': summaries.reduce((s, r) => s + r.tongChiuThue, 0),
+    'Tổng không CT': summaries.reduce((s, r) => s + r.tongKhongCT, 0),
+    'BH NLĐ': summaries.reduce((s, r) => s + r.tongTrichNLD, 0),
+    CĐP: summaries.reduce((s, r) => s + r.tongCDP, 0),
+    'Thuế TNCN': summaries.reduce((s, r) => s + r.tongThueTNCN, 0),
+    'Truy lĩnh': summaries.reduce((s, r) => s + r.tongTruyLinh, 0),
+    'Truy thu': summaries.reduce((s, r) => s + r.tongTruyThu, 0),
+    'Thực lĩnh': summaries.reduce((s, r) => s + r.tongThucLinh, 0),
+  }
+
+  const ws1 = XLSX.utils.aoa_to_sheet(titleAoA)
+  XLSX.utils.sheet_add_json(ws1, [...summaryRows, grandTotalRow], { origin: 'A5', skipHeader: false })
+  ws1['!cols'] = [
+    { wch: 5 }, { wch: 12 }, { wch: 30 }, { wch: 8 },
+    { wch: 16 }, { wch: 16 }, { wch: 14 }, { wch: 10 },
+    { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 14 },
+  ]
+  XLSX.utils.book_append_sheet(wb, ws1, 'Tổng hợp')
+
+  // ─── Sheet 2: Chi tiết từng NV (rút gọn) ───────────────────────────────────
+  if (records.length > 0) {
+    interface DetailRow {
+      'Phòng': string
+      'CCCD': string
+      'Họ tên': string
+      'Chức vụ': string
+      'Thực lĩnh': number
+      'Trạng thái': string
+    }
+    const detailRows: DetailRow[] = records.map((r) => ({
+      'Phòng': r.department_id ?? '',
+      'CCCD': r.cccd ?? '',
+      'Họ tên': r.ho_ten ?? '',
+      'Chức vụ': r.chuc_vu ?? '',
+      'Thực lĩnh': num(r.thuc_linh),
+      'Trạng thái': r.status ?? '',
+    }))
+    const ws2 = XLSX.utils.json_to_sheet(detailRows)
+    ws2['!cols'] = [
+      { wch: 20 }, { wch: 14 }, { wch: 28 }, { wch: 20 }, { wch: 14 }, { wch: 12 },
+    ]
+    XLSX.utils.book_append_sheet(wb, ws2, 'Chi tiết NV')
+  }
+
+  const fileName = `BaoCaoLuong_${monthYear}_${nowStamp()}.xlsx`
+  const out = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
+  const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  downloadBlob(blob, fileName)
+}
