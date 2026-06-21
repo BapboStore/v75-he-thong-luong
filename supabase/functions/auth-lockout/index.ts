@@ -1,19 +1,23 @@
 // =====================================================================
-// Edge Function: auth-lockout (V75, phiên 11, v0.8.0)
+// Edge Function: auth-lockout (V75, phiên 16, v0.12.0)
 // ---------------------------------------------------------------------
 // Mục đích:
 //   Đếm số lần đăng nhập sai SERVER-SIDE (không bị bypass bằng F5/clear
 //   localStorage như client-side cũ). Lưu vào `users.failed_attempts`
-//   + `users.locked_until` (đã có sẵn trong schema từ migration 001).
+//   + `users.locked_until` + `users.lockout_count` (xem migration 009).
 //
-//   Lockout policy: 5 lần sai → khoá 5 phút.
+//   Lockout policy (ESCALATED — phiên 16):
+//     - Lần khoá 1 → 5 phút
+//     - Lần khoá 2 → 15 phút
+//     - Lần khoá 3+ → 60 phút (1 giờ)
+//   lockout_count reset về 0 khi login thành công (action='reset').
 //
 // Cách dùng:
 //   - LoginPage gọi function này TRƯỚC khi gọi `auth.signInWithPassword`,
 //     truyền action='check' + cccd → trả về { locked, remaining_seconds,
-//     failed_attempts }. Nếu locked → block UI.
+//     failed_attempts, lockout_count }. Nếu locked → block UI.
 //   - Sau `auth.signInWithPassword`:
-//     - Nếu OK: gọi action='reset' để xoá failed_attempts.
+//     - Nếu OK: gọi action='reset' để xoá failed_attempts + lockout_count.
 //     - Nếu fail: gọi action='increment' để tăng failed_attempts + tự lock
 //       nếu đạt MAX.
 //
@@ -27,6 +31,7 @@
 //     "failed_attempts": number,
 //     "remaining_seconds": number,   // > 0 nếu đang locked
 //     "remaining_attempts": number,  // 5 - failed_attempts
+//     "lockout_count": number,       // số lần bị khoá lũy tích
 //   }
 //
 // Bảo mật:
@@ -40,6 +45,8 @@
 //   supabase functions deploy auth-lockout --no-verify-jwt --project-ref qvcqkciobetttltlqqjq
 //
 // QUAN TRỌNG: cờ --no-verify-jwt là bắt buộc vì caller chưa có JWT.
+//
+// Tiền đề: Migration 009 phải được apply trước (thêm cột lockout_count).
 // =====================================================================
 
 // @ts-expect-error Deno imports
@@ -48,8 +55,14 @@ import { serve } from 'https://deno.land/std@0.208.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4'
 import { corsHeaders } from '../_shared/cors.ts'
 
-const MAX_FAILED   = 5
-const LOCK_MINUTES = 5
+const MAX_FAILED = 5
+
+/** Tính số phút khoá dựa trên số lần khoá trước đó (trước khi tăng) */
+function lockMinutes(priorLockoutCount: number): number {
+  if (priorLockoutCount === 0) return 5      // lần 1 → 5 phút
+  if (priorLockoutCount === 1) return 15     // lần 2 → 15 phút
+  return 60                                  // lần 3+ → 60 phút
+}
 
 type Action = 'check' | 'increment' | 'reset'
 
@@ -63,6 +76,7 @@ interface UserRow {
   cccd: string
   failed_attempts: number | null
   locked_until: string | null
+  lockout_count: number | null
   is_active: boolean
 }
 
@@ -72,6 +86,7 @@ interface ResponseBody {
   failed_attempts: number
   remaining_seconds: number
   remaining_attempts: number
+  lockout_count: number
 }
 
 serve(async (req: Request) => {
@@ -113,7 +128,7 @@ serve(async (req: Request) => {
     // Lấy user theo CCCD
     const { data: u, error: uErr } = await admin
       .from('users')
-      .select('id, cccd, failed_attempts, locked_until, is_active')
+      .select('id, cccd, failed_attempts, locked_until, lockout_count, is_active')
       .eq('cccd', body.cccd)
       .maybeSingle<UserRow>()
 
@@ -128,20 +143,24 @@ serve(async (req: Request) => {
         failed_attempts: 0,
         remaining_seconds: 0,
         remaining_attempts: MAX_FAILED,
+        lockout_count: 0,
       })
     }
 
     const now = Date.now()
     const lockedUntilMs = u.locked_until ? new Date(u.locked_until).getTime() : 0
     const stillLocked = lockedUntilMs > now
+    const curFailed = u.failed_attempts ?? 0
+    const curLockoutCount = u.lockout_count ?? 0
 
     // ---------- action = check ----------
     if (body.action === 'check') {
       return jsonOk({
         locked: stillLocked,
-        failed_attempts: u.failed_attempts ?? 0,
+        failed_attempts: curFailed,
         remaining_seconds: stillLocked ? Math.ceil((lockedUntilMs - now) / 1000) : 0,
-        remaining_attempts: Math.max(0, MAX_FAILED - (u.failed_attempts ?? 0)),
+        remaining_attempts: Math.max(0, MAX_FAILED - curFailed),
+        lockout_count: curLockoutCount,
       })
     }
 
@@ -149,7 +168,12 @@ serve(async (req: Request) => {
     if (body.action === 'reset') {
       const { error: rErr } = await admin
         .from('users')
-        .update({ failed_attempts: 0, locked_until: null, last_login_at: new Date().toISOString() })
+        .update({
+          failed_attempts: 0,
+          locked_until: null,
+          lockout_count: 0,          // reset lockout escalation khi login thành công
+          last_login_at: new Date().toISOString(),
+        })
         .eq('id', u.id)
       if (rErr) {
         return json({ ok: false, error: `Reset thất bại: ${rErr.message}` }, 500)
@@ -159,6 +183,7 @@ serve(async (req: Request) => {
         failed_attempts: 0,
         remaining_seconds: 0,
         remaining_attempts: MAX_FAILED,
+        lockout_count: 0,
       })
     }
 
@@ -167,16 +192,22 @@ serve(async (req: Request) => {
     if (stillLocked) {
       return jsonOk({
         locked: true,
-        failed_attempts: u.failed_attempts ?? 0,
+        failed_attempts: curFailed,
         remaining_seconds: Math.ceil((lockedUntilMs - now) / 1000),
         remaining_attempts: 0,
+        lockout_count: curLockoutCount,
       })
     }
 
-    const newFailed = (u.failed_attempts ?? 0) + 1
+    const newFailed = curFailed + 1
     let newLockedUntil: string | null = null
+    let newLockoutCount = curLockoutCount
+
     if (newFailed >= MAX_FAILED) {
-      newLockedUntil = new Date(now + LOCK_MINUTES * 60_000).toISOString()
+      // Tính thời gian khoá dựa trên số lần khoá trước (escalated)
+      const mins = lockMinutes(curLockoutCount)
+      newLockedUntil = new Date(now + mins * 60_000).toISOString()
+      newLockoutCount = curLockoutCount + 1
     }
 
     const { error: iErr } = await admin
@@ -184,17 +215,20 @@ serve(async (req: Request) => {
       .update({
         failed_attempts: newFailed,
         locked_until: newLockedUntil,
+        lockout_count: newLockoutCount,
       })
       .eq('id', u.id)
     if (iErr) {
       return json({ ok: false, error: `Increment thất bại: ${iErr.message}` }, 500)
     }
 
+    const lockedNow = newLockedUntil !== null
     return jsonOk({
-      locked: newLockedUntil !== null,
+      locked: lockedNow,
       failed_attempts: newFailed,
-      remaining_seconds: newLockedUntil ? LOCK_MINUTES * 60 : 0,
+      remaining_seconds: lockedNow ? lockMinutes(curLockoutCount) * 60 : 0,
       remaining_attempts: Math.max(0, MAX_FAILED - newFailed),
+      lockout_count: newLockoutCount,
     })
   } catch (e) {
     return json({

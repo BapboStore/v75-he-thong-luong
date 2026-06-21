@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ClipboardCheck, Lock, Save, Send, Truck } from 'lucide-react'
+import { ClipboardCheck, Lock, Save, Send, Trash2, Truck } from 'lucide-react'
+import { TableRowSkeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -10,8 +11,12 @@ import {
 } from '@/components/ui/table'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
-  listAttendanceDriver, listAttendanceOffice, listAttendanceSecurity, listAttendanceTechnician,
-  listDepartments, listEmployees, refreshDriverMatch, setAttendanceStatus, upsertAttendanceBatch,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  deleteAttendanceMonth, listAttendanceDriver, listAttendanceOffice, listAttendanceSecurity,
+  listAttendanceTechnician, listDepartments, listEmployees, refreshDriverMatch,
+  setAttendanceStatus, upsertAttendanceBatch,
 } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -111,6 +116,29 @@ export default function AttendancePage() {
   )
 
   const canEditAttendance = hasRole('truong_phong', 'admin_luong', 'admin_he_thong')
+  const canDelete = hasRole('admin_luong', 'admin_he_thong')
+
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  const tableOfKhoi = (k: Khoi): 'attendance_office' | 'attendance_security' | 'attendance_technician' | 'attendance_driver' => {
+    if (k === 'security') return 'attendance_security'
+    if (k === 'technician') return 'attendance_technician'
+    if (k === 'driver') return 'attendance_driver'
+    return 'attendance_office'
+  }
+
+  const submitDeleteAttendance = async () => {
+    if (!deptId) return
+    setDeleting(true); setError(null)
+    try {
+      const n = await deleteAttendanceMonth(tableOfKhoi(khoi), deptId, monthYear)
+      setInfo(`Đã xoá ${n} bản ghi chấm công khối ${KHOI_LABEL[khoi]} tháng ${monthYear}.`)
+      setDeleteOpen(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Xoá chấm công thất bại.')
+    } finally { setDeleting(false) }
+  }
 
   return (
     <div className="space-y-4">
@@ -145,8 +173,18 @@ export default function AttendancePage() {
           <Input id="month" type="month" value={monthYear}
             onChange={e => setMonthYear(e.target.value)} />
         </div>
-        <div className="space-y-2 flex items-end text-xs text-muted-foreground">
-          {empOfDept.length} nhân viên thuộc phòng ban này
+        <div className="space-y-2 flex items-end gap-3">
+          <span className="text-xs text-muted-foreground">{empOfDept.length} nhân viên thuộc phòng ban này</span>
+          {canDelete && deptId && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-destructive hover:bg-destructive/10"
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2 className="h-4 w-4 mr-1" /> Xoá bảng công tháng này
+            </Button>
+          )}
         </div>
       </div>
 
@@ -168,29 +206,54 @@ export default function AttendancePage() {
       ) : khoi === 'office' ? (
         <OfficeGrid
           deptId={deptId} monthYear={monthYear}
-          employees={empOfDept} canEdit={canEditAttendance}
+          employees={empOfDept} canEdit={canEditAttendance} canUnlock={canDelete}
           onError={setError} onInfo={setInfo}
         />
       ) : khoi === 'security' ? (
         <SecurityGrid
           deptId={deptId} monthYear={monthYear}
-          employees={empOfDept} canEdit={canEditAttendance}
+          employees={empOfDept} canEdit={canEditAttendance} canUnlock={canDelete}
           onError={setError} onInfo={setInfo}
         />
       ) : khoi === 'technician' ? (
         <TechnicianGrid
           deptId={deptId} monthYear={monthYear}
-          employees={empOfDept} canEdit={canEditAttendance}
+          employees={empOfDept} canEdit={canEditAttendance} canUnlock={canDelete}
           onError={setError} onInfo={setInfo}
         />
       ) : (
         <DriverGrid
           deptId={deptId} monthYear={monthYear}
-          employees={empOfDept} canEdit={canEditAttendance}
+          employees={empOfDept} canEdit={canEditAttendance} canUnlock={canDelete}
           userRole={profile?.user.role ?? 'user'}
           onError={setError} onInfo={setInfo}
         />
       )}
+
+      {/* Delete attendance confirm dialog */}
+      <Dialog open={deleteOpen} onOpenChange={(o) => { if (!deleting) setDeleteOpen(o) }}>
+        <DialogContent onClose={() => setDeleteOpen(false)}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="h-5 w-5" /> Xác nhận xoá bảng chấm công
+            </DialogTitle>
+            <DialogDescription>
+              Thao tác này <strong>không thể hoàn tác</strong>. Toàn bộ bản ghi chấm công sẽ bị xoá vĩnh viễn.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md bg-muted p-3 text-sm space-y-1">
+            <div><span className="text-muted-foreground">Khối:</span> <strong>{KHOI_LABEL[khoi]}</strong></div>
+            <div><span className="text-muted-foreground">Tháng:</span> <strong>{monthYear}</strong></div>
+            <div><span className="text-muted-foreground">Phòng ban:</span> <strong>{departments.find(d => d.id === deptId)?.name ?? deptId}</strong></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleting}>Huỷ</Button>
+            <Button variant="destructive" onClick={submitDeleteAttendance} disabled={deleting}>
+              <Trash2 className="h-4 w-4 mr-1" /> {deleting ? 'Đang xoá...' : 'Xoá vĩnh viễn'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -212,6 +275,7 @@ interface SubProps {
   monthYear: string
   employees: EmployeeFull[]
   canEdit: boolean
+  canUnlock: boolean
   onError: (m: string | null) => void
   onInfo: (m: string | null) => void
 }
@@ -242,7 +306,7 @@ function buildBlankOfficeRow(emp: EmployeeFull, deptId: string, monthYear: strin
   }
 }
 
-function OfficeGrid({ deptId, monthYear, employees, canEdit, onError, onInfo }: SubProps) {
+function OfficeGrid({ deptId, monthYear, employees, canEdit, canUnlock, onError, onInfo }: SubProps) {
   const [rows, setRows] = useState<Record<string, OfficeRow>>({})
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -311,14 +375,30 @@ function OfficeGrid({ deptId, monthYear, employees, canEdit, onError, onInfo }: 
     }
   }
 
+  const unlockAll = async () => {
+    setBusy(true); onError(null)
+    try {
+      const ids = Object.values(rows).filter(r => r.status === 'locked' && r.id).map(r => r.id!) as string[]
+      if (ids.length === 0) { onInfo('Không có bản ghi nào đang chốt.'); return }
+      await setAttendanceStatus('attendance_office', ids, 'draft')
+      onInfo(`Đã mở chốt ${ids.length} bản ghi — chuyển về Nháp.`)
+      await load()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Mở chốt thất bại.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="space-y-3">
       <ActionsBar
-        canEdit={canEdit}
+        canEdit={canEdit} canUnlock={canUnlock}
         busy={busy}
         onSave={() => saveAll()}
         onSubmit={() => saveAll('pending')}
         onLock={lockAll}
+        onUnlock={unlockAll}
       />
       <Table>
         <TableHeader>
@@ -330,7 +410,7 @@ function OfficeGrid({ deptId, monthYear, employees, canEdit, onError, onInfo }: 
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableEmpty colSpan={OFFICE_FIELDS.length + 2}>Đang tải...</TableEmpty>
+            <TableRowSkeleton cols={OFFICE_FIELDS.length + 2} rows={5} />
           ) : employees.length === 0 ? (
             <TableEmpty colSpan={OFFICE_FIELDS.length + 2}>Phòng ban chưa có nhân viên đang làm việc.</TableEmpty>
           ) : employees.map(emp => {
@@ -385,7 +465,7 @@ function buildBlankSecurityRow(emp: EmployeeFull, deptId: string, monthYear: str
   }
 }
 
-function SecurityGrid({ deptId, monthYear, employees, canEdit, onError, onInfo }: SubProps) {
+function SecurityGrid({ deptId, monthYear, employees, canEdit, canUnlock, onError, onInfo }: SubProps) {
   const [rows, setRows] = useState<Record<string, SecurityRow>>({})
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -443,9 +523,22 @@ function SecurityGrid({ deptId, monthYear, employees, canEdit, onError, onInfo }
     } finally { setBusy(false) }
   }
 
+  const unlockAll = async () => {
+    setBusy(true); onError(null)
+    try {
+      const ids = Object.values(rows).filter(r => r.status === 'locked' && r.id).map(r => r.id!) as string[]
+      if (ids.length === 0) { onInfo('Không có bản ghi nào đang chốt.'); return }
+      await setAttendanceStatus('attendance_security', ids, 'draft')
+      onInfo(`Đã mở chốt ${ids.length} bản ghi — chuyển về Nháp.`)
+      await load()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Mở chốt thất bại.')
+    } finally { setBusy(false) }
+  }
+
   return (
     <div className="space-y-3">
-      <ActionsBar canEdit={canEdit} busy={busy} onSave={() => saveAll()} onSubmit={() => saveAll('pending')} onLock={lockAll} />
+      <ActionsBar canEdit={canEdit} canUnlock={canUnlock} busy={busy} onSave={() => saveAll()} onSubmit={() => saveAll('pending')} onLock={lockAll} onUnlock={unlockAll} />
       <Table>
         <TableHeader>
           <TableRow>
@@ -456,7 +549,7 @@ function SecurityGrid({ deptId, monthYear, employees, canEdit, onError, onInfo }
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableEmpty colSpan={SECURITY_FIELDS.length + 2}>Đang tải...</TableEmpty>
+            <TableRowSkeleton cols={SECURITY_FIELDS.length + 2} rows={5} />
           ) : employees.length === 0 ? (
             <TableEmpty colSpan={SECURITY_FIELDS.length + 2} />
           ) : employees.map(emp => {
@@ -507,7 +600,7 @@ function buildBlankTechRow(emp: EmployeeFull, deptId: string, monthYear: string)
   }
 }
 
-function TechnicianGrid({ deptId, monthYear, employees, canEdit, onError, onInfo }: SubProps) {
+function TechnicianGrid({ deptId, monthYear, employees, canEdit, canUnlock, onError, onInfo }: SubProps) {
   const [rows, setRows] = useState<Record<string, TechnicianRow>>({})
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -560,9 +653,21 @@ function TechnicianGrid({ deptId, monthYear, employees, canEdit, onError, onInfo
     finally { setBusy(false) }
   }
 
+  const unlockAll = async () => {
+    setBusy(true); onError(null)
+    try {
+      const ids = Object.values(rows).filter(r => r.status === 'locked' && r.id).map(r => r.id!) as string[]
+      if (ids.length === 0) { onInfo('Không có bản ghi nào đang chốt.'); return }
+      await setAttendanceStatus('attendance_technician', ids, 'draft')
+      onInfo(`Đã mở chốt ${ids.length} bản ghi — chuyển về Nháp.`)
+      await load()
+    } catch (e) { onError(e instanceof Error ? e.message : 'Mở chốt thất bại.') }
+    finally { setBusy(false) }
+  }
+
   return (
     <div className="space-y-3">
-      <ActionsBar canEdit={canEdit} busy={busy} onSave={() => saveAll()} onSubmit={() => saveAll('pending')} onLock={lockAll} />
+      <ActionsBar canEdit={canEdit} canUnlock={canUnlock} busy={busy} onSave={() => saveAll()} onSubmit={() => saveAll('pending')} onLock={lockAll} onUnlock={unlockAll} />
       <Table>
         <TableHeader>
           <TableRow>
@@ -573,7 +678,7 @@ function TechnicianGrid({ deptId, monthYear, employees, canEdit, onError, onInfo
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableEmpty colSpan={TECH_FIELDS.length + 2}>Đang tải...</TableEmpty>
+            <TableRowSkeleton cols={TECH_FIELDS.length + 2} rows={5} />
           ) : employees.length === 0 ? (
             <TableEmpty colSpan={TECH_FIELDS.length + 2} />
           ) : employees.map(emp => {
@@ -631,7 +736,7 @@ function buildBlankDriverRow(emp: EmployeeFull, deptId: string, monthYear: strin
 }
 
 function DriverGrid({
-  deptId, monthYear, employees, canEdit, userRole, onError, onInfo,
+  deptId, monthYear, employees, canEdit, canUnlock, userRole, onError, onInfo,
 }: DriverProps) {
   // Mỗi nhân viên có 2 dòng: source = truong_phong | admin_luong
   const [rows, setRows] = useState<Record<string, { tp: DriverRow; al: DriverRow }>>({})
@@ -724,6 +829,22 @@ function DriverGrid({
     finally { setBusy(false) }
   }
 
+  const unlockAll = async () => {
+    setBusy(true); onError(null)
+    try {
+      const ids: string[] = []
+      for (const slot of Object.values(rows)) {
+        if (slot.tp.id && slot.tp.status === 'locked') ids.push(slot.tp.id)
+        if (slot.al.id && slot.al.status === 'locked') ids.push(slot.al.id)
+      }
+      if (ids.length === 0) { onInfo('Không có bản ghi nào đang chốt.'); return }
+      await setAttendanceStatus('attendance_driver', ids, 'draft')
+      onInfo(`Đã mở chốt ${ids.length} bản ghi — chuyển về Nháp.`)
+      await load()
+    } catch (e) { onError(e instanceof Error ? e.message : 'Mở chốt thất bại.') }
+    finally { setBusy(false) }
+  }
+
   return (
     <div className="space-y-3">
       <Alert variant="warning">
@@ -745,6 +866,11 @@ function DriverGrid({
         <Button onClick={lockMatched} disabled={busy || !canEdit} variant="destructive">
           <Lock className="h-4 w-4 mr-1" /> Chốt các bản ghi đã khớp
         </Button>
+        {canUnlock && (
+          <Button onClick={unlockAll} disabled={busy} variant="outline" className="text-amber-600 border-amber-300 hover:bg-amber-50">
+            <Lock className="h-4 w-4 mr-1" /> Mở chốt
+          </Button>
+        )}
       </div>
 
       <Table>
@@ -759,7 +885,7 @@ function DriverGrid({
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableEmpty colSpan={DRIVER_FIELDS.length + 4}>Đang tải...</TableEmpty>
+            <TableRowSkeleton cols={DRIVER_FIELDS.length + 4} rows={5} />
           ) : employees.length === 0 ? (
             <TableEmpty colSpan={DRIVER_FIELDS.length + 4} />
           ) : employees.flatMap(emp => {
@@ -814,10 +940,10 @@ function DriverGrid({
 // =============================================================
 
 function ActionsBar({
-  canEdit, busy, onSave, onSubmit, onLock,
+  canEdit, canUnlock, busy, onSave, onSubmit, onLock, onUnlock,
 }: {
-  canEdit: boolean; busy: boolean;
-  onSave: () => void; onSubmit: () => void; onLock: () => void;
+  canEdit: boolean; canUnlock: boolean; busy: boolean;
+  onSave: () => void; onSubmit: () => void; onLock: () => void; onUnlock: () => void;
 }) {
   return (
     <div className="flex gap-2 flex-wrap">
@@ -830,6 +956,11 @@ function ActionsBar({
       <Button onClick={onLock} disabled={busy || !canEdit} variant="destructive">
         <Lock className="h-4 w-4 mr-1" /> Chốt (đã duyệt)
       </Button>
+      {canUnlock && (
+        <Button onClick={onUnlock} disabled={busy} variant="outline" className="text-amber-600 border-amber-300 hover:bg-amber-50">
+          <Lock className="h-4 w-4 mr-1" /> Mở chốt
+        </Button>
+      )}
     </div>
   )
 }

@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ChevronDown, KeyRound, LogOut, UserCircle2 } from 'lucide-react'
+import { ChevronDown, KeyRound, LogOut, Menu, UserCircle2 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { ROLE_LABEL } from '@/lib/types'
 
-export function Header() {
+interface HeaderProps {
+  onMenuToggle?: () => void
+}
+
+export function Header({ onMenuToggle }: HeaderProps) {
   const { profile, signOut } = useAuth()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
@@ -25,6 +29,15 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b bg-background/80 backdrop-blur px-4 md:px-6">
+      <div className="flex items-center gap-3">
+        {/* Hamburger — chỉ hiện trên mobile */}
+        <button
+          onClick={onMenuToggle}
+          className="md:hidden rounded-md p-2 hover:bg-accent"
+          aria-label="Mở menu"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
       <div>
         <div className="text-sm text-muted-foreground">Xin chào</div>
         <div className="text-base font-semibold leading-tight">
@@ -33,6 +46,7 @@ export function Header() {
             ({profile ? ROLE_LABEL[profile.user.role] : ''})
           </span>
         </div>
+      </div>
       </div>
 
       <div className="relative" ref={ref}>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Pencil, Plus, Search, Users } from 'lucide-react'
+import { Pencil, Plus, Search, Trash2, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,8 +14,9 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  createEmployee, listDepartments, listEmployees, listSalaryGrades, updateEmployee,
+  createEmployee, deleteEmployee, listDepartments, listEmployees, listSalaryGrades, updateEmployee,
 } from '@/lib/api'
+import { TableRowSkeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   STATUS_LABEL,
@@ -74,6 +75,10 @@ export default function EmployeesPage() {
   const [openForm, setOpenForm] = useState(false)
   const [form, setForm] = useState<FormState>(EMPTY)
   const [submitting, setSubmitting] = useState(false)
+
+  // Delete confirm
+  const [deleteTarget, setDeleteTarget] = useState<EmployeeFull | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const reload = async () => {
     setLoading(true); setError(null)
@@ -148,6 +153,21 @@ export default function EmployeesPage() {
       ghi_chu: e.ghi_chu ?? '',
     })
     setOpenForm(true)
+  }
+
+  const onConfirmDelete = async () => {
+    if (!deleteTarget) return
+    setDeleting(true); setError(null)
+    try {
+      await deleteEmployee(deleteTarget.id)
+      setDeleteTarget(null)
+      await reload()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Xoá nhân viên thất bại.')
+      setDeleteTarget(null)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const num = (v: number | ''): number => (v === '' ? 0 : Number(v))
@@ -256,7 +276,7 @@ export default function EmployeesPage() {
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableEmpty colSpan={7}>Đang tải...</TableEmpty>
+            <TableRowSkeleton cols={7} rows={6} />
           ) : items.length === 0 ? (
             <TableEmpty colSpan={7} />
           ) : items.map(emp => (
@@ -277,15 +297,55 @@ export default function EmployeesPage() {
               </TableCell>
               <TableCell className="text-right">
                 {canEdit && (
-                  <Button size="sm" variant="outline" onClick={() => onEdit(emp)}>
-                    <Pencil className="h-3 w-3" />
-                  </Button>
+                  <div className="flex justify-end gap-1">
+                    <Button size="sm" variant="outline" onClick={() => onEdit(emp)}>
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                    <Button size="sm" variant="ghost"
+                      className="text-destructive hover:bg-destructive/10"
+                      onClick={() => setDeleteTarget(emp)}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
                 )}
               </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
+
+      {/* Delete confirm dialog */}
+      <Dialog open={deleteTarget !== null} onOpenChange={(o) => { if (!o) setDeleteTarget(null) }}>
+        <DialogContent onClose={() => setDeleteTarget(null)}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="h-5 w-5" /> Xác nhận xoá nhân viên
+            </DialogTitle>
+            <DialogDescription>
+              Thao tác này <strong>không thể hoàn tác</strong>. Dữ liệu nhân viên sẽ bị xoá vĩnh viễn khỏi database.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteTarget && (
+            <div className="rounded-md bg-muted p-3 text-sm space-y-1">
+              <div><span className="text-muted-foreground">Họ tên:</span> <strong>{deleteTarget.ho_ten}</strong></div>
+              <div><span className="text-muted-foreground">CCCD:</span> <code>{deleteTarget.cccd}</code></div>
+              {deleteTarget.ngach_code && (
+                <div><span className="text-muted-foreground">Ngạch/Bậc:</span> {deleteTarget.ngach_code} / {deleteTarget.bac}</div>
+              )}
+              <div className="text-xs text-muted-foreground mt-2">
+                Nếu nhân viên có bản ghi lương hoặc chấm công, hệ thống sẽ từ chối xoá và thông báo.
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>Huỷ</Button>
+            <Button variant="destructive" onClick={onConfirmDelete} disabled={deleting}>
+              {deleting ? 'Đang xoá...' : 'Xoá vĩnh viễn'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={openForm} onOpenChange={setOpenForm}>
         <DialogContent onClose={() => setOpenForm(false)} className="max-w-2xl">

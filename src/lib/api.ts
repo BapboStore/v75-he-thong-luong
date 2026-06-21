@@ -110,18 +110,50 @@ export async function updateEmployee(id: string, patch: Partial<EmployeeFull>): 
   return data as EmployeeFull
 }
 
+export async function deleteEmployee(id: string): Promise<void> {
+  // Kiểm tra dữ liệu liên quan trước khi xoá
+  const checks = await Promise.all([
+    supabase.from('salary_records').select('id', { count: 'exact', head: true }).eq('employee_id', id),
+    supabase.from('attendance_office').select('id', { count: 'exact', head: true }).eq('employee_id', id),
+    supabase.from('attendance_driver').select('id', { count: 'exact', head: true }).eq('employee_id', id),
+    supabase.from('attendance_security').select('id', { count: 'exact', head: true }).eq('employee_id', id),
+    supabase.from('attendance_technician').select('id', { count: 'exact', head: true }).eq('employee_id', id),
+  ])
+  const [salary, office, driver, security, technician] = checks
+  const salaryCount = salary.count ?? 0
+  const attCount = (office.count ?? 0) + (driver.count ?? 0) + (security.count ?? 0) + (technician.count ?? 0)
+
+  if (salaryCount > 0)
+    throw new Error(`Không thể xoá: nhân viên có ${salaryCount} bản ghi lương. Hãy chuyển trạng thái "Đã nghỉ việc" thay vì xoá.`)
+  if (attCount > 0)
+    throw new Error(`Không thể xoá: nhân viên có ${attCount} bản ghi chấm công. Hãy chuyển trạng thái "Đã nghỉ việc" thay vì xoá.`)
+
+  // Null FK trên users trước (không xoá user account)
+  const { error: userErr } = await supabase
+    .from('users').update({ employee_id: null }).eq('employee_id', id)
+  if (userErr) throw userErr
+
+  const { error } = await supabase.from('employees').delete().eq('id', id)
+  if (error) throw error
+}
+
 // =============================================================
 // SALARY GRADES & CONFIG
 // =============================================================
 
+// Bảng hệ số bậc gần như không thay đổi trong suốt session → cache module-level.
+let _gradesCache: SalaryGrade[] | null = null
+
 export async function listSalaryGrades(): Promise<SalaryGrade[]> {
+  if (_gradesCache) return _gradesCache
   const { data, error } = await supabase
     .from('salary_grades')
     .select('*')
     .order('ngach_code', { ascending: true })
     .order('bac', { ascending: true })
   if (error) throw error
-  return (data ?? []) as SalaryGrade[]
+  _gradesCache = (data ?? []) as SalaryGrade[]
+  return _gradesCache
 }
 
 export async function listSalaryConfigs(): Promise<SalaryConfig[]> {
@@ -408,6 +440,30 @@ export async function setSalaryRecordsStatus(
   // v0.4.0: audit đã do trigger `trg_audit_salary_records` ghi tự động (UPDATE)
 }
 
+/** Xoá bảng lương theo danh sách id. Kể cả approved — trigger audit ghi nhận DELETE. */
+export async function deleteSalaryRecords(ids: string[]): Promise<void> {
+  if (ids.length === 0) return
+  const { error } = await supabase.from('salary_records').delete().in('id', ids)
+  if (error) throw error
+}
+
+/** Xoá toàn bộ bảng chấm công của một phòng+tháng (theo bảng tương ứng). */
+export async function deleteAttendanceMonth(
+  table: 'attendance_office' | 'attendance_security' | 'attendance_technician' | 'attendance_driver',
+  department_id: string,
+  month_year: string,
+): Promise<number> {
+  // Lấy count trước
+  const { count } = await supabase
+    .from(table).select('id', { count: 'exact', head: true })
+    .eq('department_id', department_id).eq('month_year', month_year)
+  const { error } = await supabase
+    .from(table).delete()
+    .eq('department_id', department_id).eq('month_year', month_year)
+  if (error) throw error
+  return count ?? 0
+}
+
 // =============================================================
 // ACTIVITY LOGS (Module 5 — phiên 8)
 // =============================================================
@@ -458,10 +514,10 @@ export async function fetchActivityLogs(
     q = q.ilike('action', `${filter.op}.%`)
   }
   if (filter.dateFrom) {
-    q = q.gte('created_at', `${filter.dateFrom}T00:00:00.000Z`)
+    q = q.gte('created_at', `${filter.dateFrom}T00:00:00+07:00`)
   }
   if (filter.dateTo) {
-    q = q.lte('created_at', `${filter.dateTo}T23:59:59.999Z`)
+    q = q.lte('created_at', `${filter.dateTo}T23:59:59+07:00`)
   }
 
   q = q.range(pagination.offset, pagination.offset + pagination.limit - 1)
@@ -512,26 +568,19 @@ export async function listUpcomingPromotions(daysAhead: number = 30): Promise<Up
  * `is_bac_cuoi = TRUE`.
  */
 export async function promoteEmployee(employeeId: string): Promise<EmployeeFull> {
-  // 1. Lấy NV hiện tại
-  const { data: emp, error: empErr } = await supabase
-    .from('employees')
-    .select('id, ngach_code, bac, ho_ten')
-    .eq('id', employeeId)
-    .maybeSingle()
+  // 1. Lấy NV + grades song song (grades thường đã cache từ lần đầu listSalaryGrades)
+  const [{ data: emp, error: empErr }, grades] = await Promise.all([
+    supabase.from('employees').select('id, ngach_code, bac, ho_ten').eq('id', employeeId).maybeSingle(),
+    listSalaryGrades(),
+  ])
   if (empErr) throw empErr
   if (!emp) throw new Error('Không tìm thấy nhân viên.')
   if (emp.bac == null) throw new Error('NV chưa có bậc hiện tại, không thể nâng bậc.')
 
   const newBac = (emp.bac as number) + 1
 
-  // 2. Verify bậc mới có trong salary_grades
-  const { data: grade, error: gErr } = await supabase
-    .from('salary_grades')
-    .select('id, bac, is_bac_cuoi')
-    .eq('ngach_code', emp.ngach_code)
-    .eq('bac', newBac)
-    .maybeSingle()
-  if (gErr) throw gErr
+  // 2. Verify bậc mới từ cache — không cần round-trip DB
+  const grade = grades.find(g => g.ngach_code === emp.ngach_code && g.bac === newBac)
   if (!grade) {
     throw new Error(
       `Ngạch "${emp.ngach_code}" không có bậc ${newBac}. NV "${emp.ho_ten}" có thể đã ở bậc cao nhất.`,
@@ -539,7 +588,7 @@ export async function promoteEmployee(employeeId: string): Promise<EmployeeFull>
   }
 
   // 3. Update employees
-  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+  const today = new Date().toISOString().slice(0, 10)
   const { data, error } = await supabase
     .from('employees')
     .update({ bac: newBac, ngay_huong_bac: today })
@@ -610,6 +659,29 @@ export async function adminResetPassword(targetUserId: string): Promise<{ ok: tr
   return data as { ok: true; cccd: string }
 }
 
+// ─── send-promotion-alert ─────────────────────────────────────────────────────
+
+/**
+ * Gọi Edge Function `send-promotion-alert` để gửi email cảnh báo NV sắp đến
+ * hạn nâng bậc qua Resend API. Caller phải là admin_luong hoặc admin_he_thong.
+ *
+ * Tiền đề: secret RESEND_API_KEY + ALERT_EMAIL_TO đã set trong Supabase.
+ */
+export async function adminSendPromotionAlert(
+  daysAhead: number = 30,
+): Promise<{ ok: true; sent: boolean; count?: number; message: string } | never> {
+  const { data, error } = await supabase.functions.invoke('send-promotion-alert', {
+    body: { days_ahead: daysAhead },
+  })
+  if (error) {
+    throw new Error(error.message || 'Gửi email cảnh báo thất bại.')
+  }
+  if (!data?.ok) {
+    throw new Error(data?.error || 'Gửi email cảnh báo thất bại (không rõ lý do).')
+  }
+  return data as { ok: true; sent: boolean; count?: number; message: string }
+}
+
 // ─── admin-create-user ────────────────────────────────────────────────────────
 
 export interface CreateUserPayload {
@@ -671,6 +743,41 @@ export async function adminDeleteUser(
 }
 
 // =============================================================
+// DASHBOARD KPI (phiên 19B)
+// =============================================================
+
+export interface DashboardKpi {
+  soNVDangLam: number
+  tongThucLinhThang: number
+  soBangLuongChoDuyet: number
+  soNVSapNangBac: number
+  currentMonth: string
+}
+
+export async function fetchDashboardKpi(): Promise<DashboardKpi> {
+  const now = new Date()
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+
+  const [empRes, salaryRes, pendingRes, promotionRes] = await Promise.all([
+    supabase.from('employees').select('id', { count: 'exact', head: true }).eq('status', 'dang_lam_viec'),
+    supabase.from('salary_records').select('thuc_linh').eq('month_year', currentMonth).eq('status', 'approved'),
+    supabase.from('salary_records').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+    supabase.rpc('check_upcoming_promotions', { p_days_ahead: 30 }),
+  ])
+
+  const tongThucLinh = ((salaryRes.data ?? []) as Array<{ thuc_linh: unknown }>)
+    .reduce((s, r) => s + (Number(r.thuc_linh ?? 0) || 0), 0)
+
+  return {
+    soNVDangLam:         empRes.count ?? 0,
+    tongThucLinhThang:   tongThucLinh,
+    soBangLuongChoDuyet: pendingRes.count ?? 0,
+    soNVSapNangBac:      ((promotionRes.data ?? []) as unknown[]).length,
+    currentMonth,
+  }
+}
+
+// =============================================================
 // REPORTS (Module 6 — phiên 15)
 // =============================================================
 
@@ -695,45 +802,97 @@ export async function fetchSalaryReport(
   return (data ?? []) as SalaryRecord[]
 }
 
-/** Cập nhật cờ is_matched cho cặp 2 nguồn lái xe theo công thức RULE-06 */
-export async function refreshDriverMatch(department_id: string, month_year: string): Promise<{
-  matched: number
-  mismatched: number
-}> {
-  const rows = await listAttendanceDriver(department_id, month_year)
+// ─── Salary trend (phiên 16) ──────────────────────────────────────────────────
+
+export interface SalaryTrendPoint {
+  month_year: string
+  tongQuiLuong: number
+  tongThucLinh: number
+  tongThueTNCN: number
+  tongTrichNLD: number
+  soNV: number
+}
+
+/**
+ * Lấy dữ liệu xu hướng quỹ lương cho `months` tháng gần nhất.
+ * Dùng RPC get_salary_trend (migration 011) — aggregate server-side (GROUP BY month_year).
+ * Trả về 1 dòng/tháng thay vì toàn bộ salary_records → giảm data transfer đáng kể.
+ */
+export async function fetchSalaryTrend(months: number = 12): Promise<SalaryTrendPoint[]> {
+  const { data, error } = await supabase.rpc('get_salary_trend', { p_months: months })
+  if (error) throw error
+  const n = (v: unknown) => { const x = Number(v ?? 0); return isFinite(x) ? x : 0 }
+  return ((data ?? []) as Array<Record<string, unknown>>).map(r => ({
+    month_year:   String(r.month_year),
+    tongQuiLuong: n(r.tong_qui_luong),
+    tongThucLinh: n(r.tong_thuc_linh),
+    tongThueTNCN: n(r.tong_thue_tncn),
+    tongTrichNLD: n(r.tong_trich_nld),
+    soNV:         n(r.so_nv),
+  }))
+}
+
+// =============================================================
+// DRIVER MATCH — RULE-06 (khôi phục sau truncation phiên 16)
+// =============================================================
+
+/**
+ * Cập nhật cờ is_matched cho cặp 2 nguồn lái xe theo công thức RULE-06.
+ * So sánh 11 chỉ tiêu giữa nguồn truong_phong và admin_luong.
+ * Dùng tolerance Math.abs(a-b) < 0.001 thay vì strict equality.
+ */
+export async function refreshDriverMatch(
+  department_id: string,
+  month_year: string,
+): Promise<{ matched: number; mismatched: number }> {
+  const FIELDS: Array<keyof AttendanceDriver> = [
+    's600', 'xe_4_7', 'xe_16_29', 'cong_mia', 'nhan_cong',
+    'cong_cho', 'so_km', 'cong_t7cn', 'ngoai_gio', 'le_tet_di_lam', 'le_tet_hoc_phep',
+  ]
+  const TOL = 0.001
+
+  const { data, error } = await supabase
+    .from('attendance_driver')
+    .select('*')
+    .eq('department_id', department_id)
+    .eq('month_year', month_year)
+  if (error) throw error
+
+  const rows = (data ?? []) as AttendanceDriver[]
+
   // Group by employee_id
-  const byEmp = new Map<string, AttendanceDriver[]>()
+  const byEmp = new Map<string, { tp?: AttendanceDriver; al?: AttendanceDriver }>()
   for (const r of rows) {
-    const arr = byEmp.get(r.employee_id) ?? []
-    arr.push(r)
-    byEmp.set(r.employee_id, arr)
+    const slot = byEmp.get(r.employee_id) ?? {}
+    if ((r.source as DriverSource) === 'truong_phong') slot.tp = r
+    else slot.al = r
+    byEmp.set(r.employee_id, slot)
   }
+
   let matched = 0
   let mismatched = 0
-  for (const [, arr] of byEmp) {
-    const tp = arr.find(r => r.source === ('truong_phong' as DriverSource))
-    const al = arr.find(r => r.source === ('admin_luong' as DriverSource))
-    if (!tp || !al) {
-      // Thiếu nguồn => không match
-           for (const r of arr) {
-        if (r.is_matched) {
-          await supabase.from('attendance_driver').update({ is_matched: false }).eq('id', r.id)
-        }
-      }
-      mismatched++
-      continue
-    }
-    const numFields: (keyof AttendanceDriver)[] = [
-      's600', 'xe_4_7', 'xe_16_29', 'cong_mia', 'nhan_cong', 'cong_cho',
-      'so_km', 'cong_t7cn', 'ngoai_gio', 'le_tet_di_lam', 'le_tet_hoc_phep',
-    ]
-    // So sánh sau khi �p kiếu (Supabase NUMERIC có thể trả string)
-    const ok = numFields.every(f => Number(tp[f]) === Number(al[f]))
-    if (tp.is_matched !== ok || al.is_matched !== ok) {
-      await supabase.from('attendance_driver').update({ is_matched: ok }).in('id', [tp.id, al.id])
-    }
+  const updates: Array<{ id: string; is_matched: boolean }> = []
+
+  byEmp.forEach(({ tp, al }) => {
+    if (!tp || !al) return
+    const ok = FIELDS.every(f => {
+      const a = Number(tp[f] ?? 0)
+      const b = Number(al[f] ?? 0)
+      return Math.abs(a - b) < TOL
+    })
     if (ok) matched++
     else mismatched++
+    updates.push({ id: tp.id, is_matched: ok })
+    updates.push({ id: al.id, is_matched: ok })
+  })
+
+  // Batch upsert is_matched (1 request thay vì N)
+  if (updates.length > 0) {
+    const { error: upsertError } = await supabase
+      .from('attendance_driver')
+      .upsert(updates, { onConflict: 'id' })
+    if (upsertError) throw upsertError
   }
+
   return { matched, mismatched }
 }

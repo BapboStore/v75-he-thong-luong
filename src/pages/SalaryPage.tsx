@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  BarChart3, Calculator, CheckCircle2, Download, FileSpreadsheet, Pencil, RotateCcw, Save, Send, XCircle,
+  BarChart3, Calculator, CheckCircle2, Download, FileSpreadsheet, Pencil, RotateCcw, Save, Send, Trash2, XCircle,
 } from 'lucide-react'
 import { exportSalaryToExcel } from '@/lib/excel'
 import { Button } from '@/components/ui/button'
@@ -17,9 +17,9 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  getActiveSalaryConfig, listAttendanceDriver, listAttendanceOffice, listAttendanceSecurity,
-  listAttendanceTechnician, listDepartments, listEmployees, listSalaryGrades, listSalaryRecords,
-  setSalaryRecordsStatus, upsertSalaryRecords,
+  deleteSalaryRecords, getActiveSalaryConfig, listAttendanceDriver, listAttendanceOffice,
+  listAttendanceSecurity, listAttendanceTechnician, listDepartments, listEmployees,
+  listSalaryGrades, listSalaryRecords, setSalaryRecordsStatus, upsertSalaryRecords,
 } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { fmtVND } from '@/lib/utils'
@@ -75,6 +75,9 @@ export default function SalaryPage() {
   const [editEmp, setEditEmp] = useState<EmployeeFull | null>(null)
   const [cancelDialog, setCancelDialog] = useState<{ open: boolean; ids: string[]; reason: string }>({
     open: false, ids: [], reason: '',
+  })
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; ids: string[]; label: string }>({
+    open: false, ids: [], label: '',
   })
 
   // truong_phong tự khoá phòng ban của họ
@@ -307,6 +310,21 @@ export default function SalaryPage() {
     } finally { setBusy(false) }
   }
 
+  const openDelete = (ids: string[], label: string) =>
+    setDeleteDialog({ open: true, ids, label })
+  const submitDelete = async () => {
+    if (deleteDialog.ids.length === 0) return
+    setBusy(true); setError(null); setInfo(null)
+    try {
+      await deleteSalaryRecords(deleteDialog.ids)
+      setInfo(`Đã xoá ${deleteDialog.ids.length} bản ghi lương.`)
+      setDeleteDialog({ open: false, ids: [], label: '' })
+      await reload()
+    } catch (e) {
+      setError(extractMsg(e, 'Xoá thất bại.'))
+    } finally { setBusy(false) }
+  }
+
   // Tính tổng các cột để hiển thị footer
   const totals = useMemo(() => {
     return records.reduce((s, r) => ({
@@ -389,6 +407,19 @@ export default function SalaryPage() {
         <Button onClick={reload} disabled={busy} variant="outline">
           <FileSpreadsheet className="h-4 w-4 mr-1" /> Tải lại
         </Button>
+        {canApprove && records.length > 0 && (
+          <Button
+            variant="ghost"
+            className="text-destructive hover:bg-destructive/10"
+            disabled={busy}
+            onClick={() => openDelete(
+              records.map(r => r.id),
+              `${records.length} bản lương tháng ${monthYear} của phòng đã chọn`,
+            )}
+          >
+            <Trash2 className="h-4 w-4 mr-1" /> Xoá cả tháng
+          </Button>
+        )}
         <Button
           onClick={() => {
             try {
@@ -469,6 +500,15 @@ export default function SalaryPage() {
                       <XCircle className="h-3 w-3 mr-1" /> Huỷ
                     </Button>
                   )}
+                  {canApprove && (
+                    <Button
+                      size="sm" variant="ghost"
+                      className="text-destructive hover:bg-destructive/10"
+                      onClick={() => openDelete([r.id], `bản lương của ${r.ho_ten} tháng ${monthYear}`)}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             )
@@ -506,6 +546,34 @@ export default function SalaryPage() {
           }}
         />
       )}
+
+      {/* Delete salary records dialog */}
+      <Dialog open={deleteDialog.open} onOpenChange={(o) => setDeleteDialog(s => ({ ...s, open: o }))}>
+        <DialogContent onClose={() => setDeleteDialog({ open: false, ids: [], label: '' })}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="h-5 w-5" /> Xác nhận xoá bảng lương
+            </DialogTitle>
+            <DialogDescription>
+              Thao tác này <strong>không thể hoàn tác</strong>. Dữ liệu sẽ bị xoá vĩnh viễn khỏi database (audit log vẫn giữ lại).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md bg-muted p-3 text-sm">
+            Sẽ xoá: <strong>{deleteDialog.label}</strong>
+            {deleteDialog.ids.length > 1 && (
+              <div className="mt-1 text-xs text-muted-foreground">
+                Bao gồm cả bản lương đã duyệt (nếu có). Hệ thống sẽ xoá toàn bộ.
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialog({ open: false, ids: [], label: '' })} disabled={busy}>Huỷ</Button>
+            <Button variant="destructive" onClick={submitDelete} disabled={busy}>
+              <Trash2 className="h-4 w-4 mr-1" /> {busy ? 'Đang xoá...' : 'Xoá vĩnh viễn'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Cancel approved dialog */}
       <Dialog open={cancelDialog.open} onOpenChange={(o) => setCancelDialog(s => ({ ...s, open: o }))}>

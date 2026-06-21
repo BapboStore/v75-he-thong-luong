@@ -17,6 +17,7 @@ import {
   type CreateUserPayload,
 } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
+import { TableRowSkeleton } from '@/components/ui/skeleton'
 import {
   ROLE_LABEL,
   type AppUser, type Department, type EmployeeFull, type UserRole,
@@ -373,7 +374,7 @@ export default function UsersPage() {
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableEmpty colSpan={8}>Đang tải...</TableEmpty>
+            <TableRowSkeleton cols={8} rows={5} />
           ) : users.length === 0 ? (
             <TableEmpty colSpan={8} />
           ) : users.map(u => {

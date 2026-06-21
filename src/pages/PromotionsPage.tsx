@@ -15,7 +15,7 @@
  *      User thường không thấy menu này nhờ Sidebar filter; route guard cũng chặn.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ArrowUp, Calendar, CheckSquare, RotateCw, TrendingUp } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Calendar, CheckSquare, Mail, RotateCw, TrendingUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
@@ -28,10 +28,12 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  listUpcomingPromotions, promoteEmployee, type UpcomingPromotionRow,
+  listUpcomingPromotions, promoteEmployee, adminSendPromotionAlert, type UpcomingPromotionRow,
 } from '@/lib/api'
+import { TableRowSkeleton } from '@/components/ui/skeleton'
 
 const DAYS_OPTIONS = [7, 30, 60, 90, 180] as const
+const PAGE_SIZE = 10
 
 function formatDate(iso: string): string {
   if (!iso) return '—'
@@ -63,9 +65,16 @@ export default function PromotionsPage() {
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
   const [bulkProgress, setBulkProgress] = useState<string | null>(null)
 
+  // Email alert
+  const [sendingEmail, setSendingEmail] = useState(false)
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1)
+
   const reload = useCallback(async () => {
     setLoading(true); setError(null)
     setSelectedIds(new Set()) // reset selection on reload
+    setCurrentPage(1)
     try {
       const data = await listUpcomingPromotions(daysAhead)
       setRows(data)
@@ -84,6 +93,9 @@ export default function PromotionsPage() {
     const later  = rows.length - urgent - soon
     return { urgent, soon, later, total: rows.length }
   }, [rows])
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  const pagedRows = rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
   // ─── Checkbox helpers ───────────────────────────────────────────────────────
 
@@ -137,19 +149,20 @@ export default function PromotionsPage() {
   const onConfirmBulkPromote = async () => {
     if (selectedRows.length === 0) return
     setBulkSubmitting(true); setError(null); setInfo(null)
+    setBulkProgress(`Đang nâng bậc ${selectedRows.length} nhân viên…`)
     const ok: string[] = []
     const fail: string[] = []
 
-    for (let i = 0; i < selectedRows.length; i++) {
-      const r = selectedRows[i]
-      setBulkProgress(`Đang xử lý ${i + 1}/${selectedRows.length}: ${r.ho_ten}…`)
-      try {
-        await promoteEmployee(r.employee_id)
-        ok.push(r.ho_ten)
-      } catch (err) {
-        fail.push(`${r.ho_ten} (${err instanceof Error ? err.message : 'lỗi'})`)
-      }
-    }
+    await Promise.all(
+      selectedRows.map(async (r) => {
+        try {
+          await promoteEmployee(r.employee_id)
+          ok.push(r.ho_ten)
+        } catch (err) {
+          fail.push(`${r.ho_ten} (${err instanceof Error ? err.message : 'lỗi'})`)
+        }
+      })
+    )
 
     setBulkProgress(null)
     setBulkOpen(false)
@@ -162,6 +175,19 @@ export default function PromotionsPage() {
     else               setError(parts.join('  '))
 
     await reload()
+  }
+
+  // ─── Gửi email cảnh báo ───────────────────────────────────────────────────
+  const onSendEmailAlert = async () => {
+    setSendingEmail(true); setError(null); setInfo(null)
+    try {
+      const res = await adminSendPromotionAlert(daysAhead)
+      setInfo(res.message)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Gửi email thất bại.')
+    } finally {
+      setSendingEmail(false)
+    }
   }
 
   return (
@@ -211,6 +237,16 @@ export default function PromotionsPage() {
         <Button variant="outline" onClick={reload} disabled={loading}>
           <RotateCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           Tải lại
+        </Button>
+
+        <Button
+          variant="outline"
+          onClick={onSendEmailAlert}
+          disabled={sendingEmail || loading || rows.length === 0}
+          title="Gửi email cảnh báo nâng bậc cho admin (qua Resend)"
+        >
+          <Mail className={`mr-2 h-4 w-4 ${sendingEmail ? 'animate-pulse' : ''}`} />
+          {sendingEmail ? 'Đang gửi...' : 'Gửi email cảnh báo'}
         </Button>
 
         {/* Bulk promote button — chỉ hiện khi đã chọn ít nhất 1 */}
@@ -265,12 +301,12 @@ export default function PromotionsPage() {
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableEmpty colSpan={9}>Đang tải...</TableEmpty>
+            <TableRowSkeleton cols={9} rows={5} />
           ) : rows.length === 0 ? (
             <TableEmpty colSpan={9}>
               Không có nhân viên nào đến hạn nâng bậc trong {daysAhead} ngày tới.
             </TableEmpty>
-          ) : rows.map((r) => {
+          ) : pagedRows.map((r) => {
             const u = urgencyBadge(r.days_remaining)
             const checked = selectedIds.has(r.employee_id)
             return (
@@ -309,6 +345,41 @@ export default function PromotionsPage() {
           })}
         </TableBody>
       </Table>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between gap-2 text-sm">
+          <span className="text-muted-foreground">
+            Trang {currentPage}/{totalPages} · {rows.length} NV
+          </span>
+          <div className="flex gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage === 1}
+              onClick={() => setCurrentPage(1)}
+            >«</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage === 1}
+              onClick={() => setCurrentPage(p => p - 1)}
+            >‹ Trước</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage === totalPages}
+              onClick={() => setCurrentPage(p => p + 1)}
+            >Tiếp ›</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage === totalPages}
+              onClick={() => setCurrentPage(totalPages)}
+            >»</Button>
+          </div>
+        </div>
+      )}
 
       {/* Single confirm dialog */}
       <Dialog open={target !== null} onOpenChange={(o) => { if (!o) setTarget(null) }}>

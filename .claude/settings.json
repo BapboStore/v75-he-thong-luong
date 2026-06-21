@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build)",
+      "Bash(npm run typecheck)",
+      "Bash(npm run dev)",
+      "Bash(netlify deploy --prod --dir=dist)",
+      "Bash(supabase login *)",
+      "Bash(supabase logout)",
+      "Bash(supabase projects list)",
+      "Bash(supabase functions deploy *)",
+      "Bash(supabase secrets set *)",
+      "Bash(supabase link *)"
+    ]
+  }
+}

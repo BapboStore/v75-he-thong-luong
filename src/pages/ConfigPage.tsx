@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Calculator, Plus, Settings } from 'lucide-react'
+import { TableRowSkeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -160,7 +161,7 @@ export default function ConfigPage() {
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableEmpty colSpan={8}>Đang tải...</TableEmpty>
+            <TableRowSkeleton cols={8} rows={4} />
           ) : items.length === 0 ? (
             <TableEmpty colSpan={8} />
           ) : items.map((c, idx) => (

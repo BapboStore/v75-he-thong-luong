@@ -24,6 +24,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import { fetchActivityLogs, type ActivityLogFilter } from '@/lib/api'
+import { TableRowSkeleton } from '@/components/ui/skeleton'
 import {
   LOG_ENTITY_TYPES, LOG_OP_LABEL,
   parseLogAction, type ActivityLog,
@@ -348,7 +349,7 @@ export default function LogsPage() {
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableEmpty colSpan={6}>Đang tải...</TableEmpty>
+            <TableRowSkeleton cols={6} rows={8} />
           ) : rows.length === 0 ? (
             <TableEmpty colSpan={6} />
           ) : rows.map((log) => {

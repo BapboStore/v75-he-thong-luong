@@ -10,10 +10,11 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  AlertTriangle, Download, RotateCw, TrendingUp, Users, Wallet,
+  AlertTriangle, Download, FileText, RotateCw, TrendingUp, Users, Wallet,
 } from 'lucide-react'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  BarChart, Bar, LineChart, Line,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -23,7 +24,7 @@ import { Badge } from '@/components/ui/badge'
 import {
   Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
-import { fetchSalaryReport, listDepartments } from '@/lib/api'
+import { fetchSalaryReport, fetchSalaryTrend, listDepartments, type SalaryTrendPoint } from '@/lib/api'
 import { exportSalaryReportToExcel, type DeptSummaryRow } from '@/lib/excel'
 import type { Department, SalaryRecord, SalaryRecordStatus } from '@/lib/types'
 import { SR_STATUS_LABEL } from '@/lib/types'
@@ -101,7 +102,13 @@ function KpiCard({ icon, label, value, unit, bg = 'bg-card', highlight }: KpiCar
 
 // Main page
 
+type ActiveTab = 'summary' | 'trend'
+const TREND_MONTHS_OPTIONS = [6, 12, 18, 24] as const
+
 export default function ReportsPage() {
+  const [activeTab, setActiveTab] = useState<ActiveTab>('summary')
+
+  // Tab "Tổng hợp"
   const [monthYear, setMonthYear] = useState(currentMonthYear)
   const [statusFilter, setStatusFilter] = useState<'' | SalaryRecordStatus>('')
   const [records, setRecords] = useState<SalaryRecord[]>([])
@@ -109,6 +116,13 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [exportingPdf, setExportingPdf] = useState(false)
+
+  // Tab "Xu hướng"
+  const [trendMonths, setTrendMonths] = useState<number>(12)
+  const [trendData, setTrendData] = useState<SalaryTrendPoint[]>([])
+  const [trendLoading, setTrendLoading] = useState(false)
+  const [trendError, setTrendError] = useState<string | null>(null)
 
   const deptMap = useMemo<Map<string, Department>>(() => {
     const m = new Map<string, Department>()
@@ -134,6 +148,32 @@ export default function ReportsPage() {
   }, [monthYear, statusFilter])
 
   useEffect(() => { load() }, [load])
+
+  // ─── Xu hướng ──────────────────────────────────────────────────────────────
+  const loadTrend = useCallback(async () => {
+    setTrendLoading(true); setTrendError(null)
+    try {
+      const data = await fetchSalaryTrend(trendMonths)
+      setTrendData(data)
+    } catch (err) {
+      setTrendError(err instanceof Error ? err.message : 'Không tải được dữ liệu xu hướng.')
+    } finally {
+      setTrendLoading(false)
+    }
+  }, [trendMonths])
+
+  useEffect(() => {
+    if (activeTab === 'trend') loadTrend()
+  }, [activeTab, loadTrend])
+
+  const trendChartData = useMemo(() =>
+    trendData.map((p) => ({
+      month: p.month_year,
+      'Quỹ lương':  Math.round(p.tongQuiLuong / 1_000_000),
+      'Thực lĩnh':  Math.round(p.tongThucLinh / 1_000_000),
+      'Thuế TNCN':  Math.round(p.tongThueTNCN / 1_000_000),
+    })),
+  [trendData])
 
   const summaries = useMemo<DeptSummaryRow[]>(() => {
     const byDept = new Map<string, SalaryRecord[]>()
@@ -194,6 +234,86 @@ export default function ReportsPage() {
     }
   }
 
+  const onExportPdf = async () => {
+    if (summaries.length === 0) return
+    setExportingPdf(true); setError(null)
+    try {
+      const { jsPDF } = await import('jspdf')
+      const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+
+      // Header
+      doc.setFontSize(14)
+      doc.text('BAO CAO TONG HOP LUONG', 148, 14, { align: 'center' })
+      doc.setFontSize(10)
+      doc.text(`Ky luong: ${monthYear}${statusFilter ? '  |  Trang thai: ' + SR_STATUS_LABEL[statusFilter] : ''}`, 148, 21, { align: 'center' })
+
+      // Table columns
+      const cols = ['Phong ban', 'So NV', 'Chiu thue', 'Khong CT', 'BHXH NLD', 'CDP', 'Thue TNCN', 'Thuc linh']
+      const colWidths = [50, 16, 32, 30, 28, 24, 28, 32]
+      const startX = 10
+      let y = 30
+
+      const drawRow = (cells: string[], bold = false, bg?: string) => {
+        let x = startX
+        if (bg) {
+          doc.setFillColor(bg)
+          doc.rect(startX, y - 5, colWidths.reduce((a, b) => a + b, 0), 7, 'F')
+        }
+        doc.setFontSize(bold ? 9 : 8)
+        doc.setFont('helvetica', bold ? 'bold' : 'normal')
+        cells.forEach((cell, i) => {
+          const align = i === 0 ? 'left' : 'right'
+          const textX = align === 'right' ? x + colWidths[i] - 1 : x + 1
+          doc.text(String(cell), textX, y, { align })
+          x += colWidths[i]
+        })
+        // bottom border
+        doc.setDrawColor(200, 200, 200)
+        doc.line(startX, y + 2, startX + colWidths.reduce((a, b) => a + b, 0), y + 2)
+        y += 7
+      }
+
+      // Header row
+      drawRow(cols, true, '#e8e8f0')
+      y += 1
+
+      for (const s of summaries) {
+        drawRow([
+          s.deptName.slice(0, 28),
+          String(s.soNV),
+          (s.tongChiuThue / 1_000_000).toFixed(1),
+          (s.tongKhongCT / 1_000_000).toFixed(1),
+          (s.tongTrichNLD / 1_000_000).toFixed(1),
+          (s.tongCDP / 1_000_000).toFixed(1),
+          (s.tongThueTNCN / 1_000_000).toFixed(1),
+          (s.tongThucLinh / 1_000_000).toFixed(1),
+        ])
+      }
+
+      // Total row
+      drawRow([
+        `TONG CONG (${summaries.length} phong)`,
+        String(totals.soNV),
+        (summaries.reduce((s, r) => s + r.tongChiuThue, 0) / 1_000_000).toFixed(1),
+        (summaries.reduce((s, r) => s + r.tongKhongCT, 0) / 1_000_000).toFixed(1),
+        (summaries.reduce((s, r) => s + r.tongTrichNLD, 0) / 1_000_000).toFixed(1),
+        (summaries.reduce((s, r) => s + r.tongCDP, 0) / 1_000_000).toFixed(1),
+        (totals.tongThueTNCN / 1_000_000).toFixed(1),
+        (totals.tongThucLinh / 1_000_000).toFixed(1),
+      ], true, '#f0f0f8')
+
+      doc.setFontSize(7)
+      doc.setFont('helvetica', 'normal')
+      doc.text('Don vi: trieu dong', startX, y + 3)
+
+      doc.save(`bao-cao-luong-${monthYear}.pdf`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Xuất PDF thất bại.')
+    } finally {
+      setExportingPdf(false)
+    }
+  }
+
   return (
     <div className="space-y-5">
       <div>
@@ -201,10 +321,122 @@ export default function ReportsPage() {
           <TrendingUp className="h-6 w-6 text-primary" /> Báo cáo tổng hợp lương
         </h1>
         <p className="text-sm text-muted-foreground">
-          Tổng hợp bảng lương theo phòng ban cho một kỳ.
-          Chọn tháng và bộ lọc trạng thái, sau đó xem biểu đồ và bảng chi tiết hoặc xuất Excel.
+          Tổng hợp bảng lương theo phòng ban. Chọn tab Tổng hợp để xem 1 kỳ, hoặc Xu hướng để so sánh nhiều tháng.
         </p>
       </div>
+
+      {/* Tab switcher */}
+      <div className="flex gap-1 border-b">
+        {(['summary', 'trend'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === tab
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {tab === 'summary' ? 'Tổng hợp theo tháng' : 'Xu hướng nhiều tháng'}
+          </button>
+        ))}
+      </div>
+
+      {/* ─── TAB: Xu hướng ─── */}
+      {activeTab === 'trend' && (
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-end gap-4 rounded-md border bg-card p-4">
+            <div className="space-y-1">
+              <Label htmlFor="trend_months">Số tháng hiển thị</Label>
+              <Select
+                id="trend_months"
+                value={String(trendMonths)}
+                onChange={(e) => setTrendMonths(Number(e.target.value))}
+                className="w-36"
+              >
+                {TREND_MONTHS_OPTIONS.map((m) => (
+                  <option key={m} value={m}>{m} tháng</option>
+                ))}
+              </Select>
+            </div>
+            <Button variant="outline" onClick={loadTrend} disabled={trendLoading}>
+              <RotateCw className={`mr-2 h-4 w-4 ${trendLoading ? 'animate-spin' : ''}`} />
+              Tải lại
+            </Button>
+          </div>
+
+          {trendError && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Lỗi</AlertTitle>
+              <AlertDescription>{trendError}</AlertDescription>
+            </Alert>
+          )}
+
+          {trendLoading && (
+            <p className="text-sm text-muted-foreground animate-pulse">Đang tải dữ liệu xu hướng…</p>
+          )}
+
+          {!trendLoading && trendData.length === 0 && !trendError && (
+            <p className="text-sm text-muted-foreground">
+              Không có dữ liệu bảng lương trong {trendMonths} tháng gần nhất.
+            </p>
+          )}
+
+          {!trendLoading && trendChartData.length > 0 && (
+            <>
+              <div className="rounded-md border bg-card p-4">
+                <h2 className="text-base font-semibold mb-3">
+                  Xu hướng quỹ lương {trendMonths} tháng gần nhất (đơn vị: triệu đồng)
+                </h2>
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={trendChartData} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} unit="tr" />
+                    <Tooltip formatter={(val) => [`${val} triệu đ`]} />
+                    <Legend />
+                    <Line type="monotone" dataKey="Quỹ lương"  stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} />
+                    <Line type="monotone" dataKey="Thực lĩnh"  stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} />
+                    <Line type="monotone" dataKey="Thuế TNCN"  stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Bảng tổng hợp theo tháng */}
+              <div>
+                <h2 className="text-base font-semibold mb-2">Chi tiết theo tháng</h2>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Kỳ lương</TableHead>
+                      <TableHead className="text-right">Số NV</TableHead>
+                      <TableHead className="text-right">Tổng quỹ lương</TableHead>
+                      <TableHead className="text-right">Thuế TNCN</TableHead>
+                      <TableHead className="text-right font-semibold">Thực lĩnh</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {trendData.map((p) => (
+                      <TableRow key={p.month_year}>
+                        <TableCell className="font-mono">{p.month_year}</TableCell>
+                        <TableCell className="text-right">{p.soNV}</TableCell>
+                        <TableCell className="text-right text-sm">{fmtMoney(p.tongQuiLuong)}</TableCell>
+                        <TableCell className="text-right text-sm text-amber-600">{fmtMoney(p.tongThueTNCN)}</TableCell>
+                        <TableCell className="text-right font-semibold text-primary">{fmtMoney(p.tongThucLinh)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ─── TAB: Tổng hợp ─── */}
+      {activeTab === 'summary' && (
+        <div className="space-y-5">
 
       {error && (
         <Alert variant="destructive">
@@ -248,14 +480,23 @@ export default function ReportsPage() {
           Tải lại
         </Button>
 
-        <Button
-          className="ml-auto"
-          onClick={onExport}
-          disabled={loading || exporting || summaries.length === 0}
-        >
-          <Download className="mr-2 h-4 w-4" />
-          {exporting ? 'Đang xuất...' : 'Xuất Excel'}
-        </Button>
+        <div className="ml-auto flex gap-2">
+          <Button
+            variant="outline"
+            onClick={onExportPdf}
+            disabled={loading || exportingPdf || summaries.length === 0}
+          >
+            <FileText className="mr-2 h-4 w-4" />
+            {exportingPdf ? 'Đang xuất...' : 'Xuất PDF'}
+          </Button>
+          <Button
+            onClick={onExport}
+            disabled={loading || exporting || summaries.length === 0}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            {exporting ? 'Đang xuất...' : 'Xuất Excel'}
+          </Button>
+        </div>
       </div>
 
       {loading && (
@@ -270,7 +511,7 @@ export default function ReportsPage() {
       )}
 
       {!loading && records.length > 0 && (
-        <>
+        <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             <KpiCard
               icon={<Users className="h-5 w-5 text-blue-500" />}
@@ -391,7 +632,9 @@ export default function ReportsPage() {
               </TableBody>
             </Table>
           </div>
-        </>
+        </div>
+      )}
+        </div>
       )}
     </div>
   )

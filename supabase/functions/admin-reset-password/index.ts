@@ -155,6 +155,16 @@ serve(async (req: Request) => {
       }, 500)
     }
 
+    // ===== 8. Ghi audit log (fire-and-forget) =====
+    adminClient.from('activity_logs').insert({
+      user_id: callerAuthId,
+      user_cccd: callerRow.cccd,
+      action: 'admin.password_reset',
+      entity_type: 'users',
+      entity_id: targetRow.id,
+      new_value: { target_cccd: targetRow.cccd, reset_to: 'default' },
+    }).then(() => {/* ignore */}).catch(() => {/* ignore */})
+
     return json({
       ok: true,
       cccd: targetRow.cccd,

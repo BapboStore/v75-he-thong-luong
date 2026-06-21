@@ -16,6 +16,7 @@ import {
   createDepartment, listDepartments, setDepartmentActive, updateDepartment,
 } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
+import { TableRowSkeleton } from '@/components/ui/skeleton'
 import {
   DEPT_TYPE_LABEL, type Department, type DepartmentSalaryType,
 } from '@/lib/types'
@@ -144,7 +145,7 @@ export default function DepartmentsPage() {
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableEmpty colSpan={6}>Đang tải...</TableEmpty>
+            <TableRowSkeleton cols={6} rows={5} />
           ) : items.length === 0 ? (
             <TableEmpty colSpan={6} />
           ) : items.map(d => (

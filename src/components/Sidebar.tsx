@@ -1,4 +1,5 @@
-import { NavLink } from 'react-router-dom'
+import { useEffect } from 'react'
+import { NavLink, useLocation } from 'react-router-dom'
 import {
   BarChart3, Building2, ClipboardCheck, FileText, History,
   LayoutDashboard, Settings, TrendingUp, Users, Wallet,
@@ -28,18 +29,40 @@ const MENU: MenuItem[] = [
   { to: '/config',      label: 'Cấu hình hệ thống',   icon: Settings,        roles: ['admin_he_thong'] },
 ]
 
-export function Sidebar() {
+interface SidebarProps {
+  open?: boolean
+  onClose?: () => void
+}
+
+export function Sidebar({ open = false, onClose }: SidebarProps) {
   const { profile } = useAuth()
   const role = profile?.user.role ?? 'user'
   const visible = MENU.filter(m => m.roles.includes(role))
+  const location = useLocation()
+
+  // Close sidebar on route change (mobile)
+  useEffect(() => {
+    onClose?.()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname])
 
   return (
-    <aside className="hidden md:flex md:w-64 flex-col border-r bg-card">
+    <aside
+      className={cn(
+        'flex flex-col border-r bg-card w-64 flex-shrink-0',
+        // Desktop: always visible
+        'md:flex md:relative md:translate-x-0 md:z-auto',
+        // Mobile: slide in/out overlay
+        'fixed inset-y-0 left-0 z-30 transition-transform duration-200',
+        open ? 'translate-x-0' : '-translate-x-full',
+        'md:translate-x-0',
+      )}
+    >
       <div className="flex h-16 items-center gap-3 px-4 border-b">
         <div className="h-9 w-9 rounded-lg bg-primary text-primary-foreground flex items-center justify-center text-sm font-bold">V75</div>
         <div>
           <div className="text-sm font-semibold leading-tight">Hệ thống Lương</div>
-          <div className="text-[11px] text-muted-foreground">v0.11.0 – Báo cáo + Nâng bậc hàng loạt</div>
+          <div className="text-[11px] text-muted-foreground">v0.14.0 – Mobile responsive</div>
         </div>
       </div>
 
