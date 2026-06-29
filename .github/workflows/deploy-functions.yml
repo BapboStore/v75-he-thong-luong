@@ -1,0 +1,41 @@
+name: Deploy Supabase Functions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'supabase/functions/**'
+      - '.github/workflows/deploy-functions.yml'
+
+jobs:
+  deploy-functions:
+    runs-on: ubuntu-latest
+    
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy admin-create-user
+        run: supabase functions deploy admin-create-user --project-ref $SUPABASE_PROJECT_ID
+
+      - name: Deploy admin-delete-user
+        run: supabase functions deploy admin-delete-user --project-ref $SUPABASE_PROJECT_ID
+
+      - name: Deploy admin-reset-password
+        run: supabase functions deploy admin-reset-password --project-ref $SUPABASE_PROJECT_ID
+
+      - name: Deploy auth-lockout
+        run: supabase functions deploy auth-lockout --no-verify-jwt --project-ref $SUPABASE_PROJECT_ID
+
+      - name: Deploy send-promotion-alert
+        run: supabase functions deploy send-promotion-alert --no-verify-jwt --project-ref $SUPABASE_PROJECT_ID
