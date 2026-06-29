@@ -62,7 +62,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
         <div className="h-9 w-9 rounded-lg bg-primary text-primary-foreground flex items-center justify-center text-sm font-bold">V75</div>
         <div>
           <div className="text-sm font-semibold leading-tight">Hệ thống Lương</div>
-          <div className="text-[11px] text-muted-foreground">v0.14.0 – Mobile responsive</div>
+          <div className="text-[11px] text-muted-foreground">v0.14.1 – Hard delete & Mở chốt</div>
         </div>
       </div>
 
